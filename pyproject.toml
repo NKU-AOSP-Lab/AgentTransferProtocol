@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "atp"
+version = "1.0.0a1"
+description = "Agent Transfer Protocol — secure agent-to-agent communication"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "Xiang Li" },
+    { name = "Lu Sun" },
+    { name = "Yuqi Qiu" },
+]
+
+dependencies = [
+    "cryptography>=43.0",
+    "dnspython>=2.7",
+    "httpx>=0.28",
+    "uvicorn>=0.34",
+    "starlette>=0.45",
+    "click>=8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-httpx>=0.35",
+]
+
+[project.scripts]
+atp = "atp.cli.main:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/atp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
