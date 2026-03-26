@@ -17,17 +17,17 @@ DNS-based discovery, mandatory Ed25519 signing, server-mediated delivery.
     |                    |                     |                    |
     |---[1. Submit]----->|                     |                    |
     |                    |                     |                    |
-    |                    |   2. ATS Verify     |                    |
-    |                    |   3. ATK Verify     |                    |
+    |              2. Credential Verify        |                    |
     |                    |                     |                    |
-    |                    |  4. DNS SVCB Query  |                    |
-    |                    |  5. TLS 1.3 + POST  |                    |
-    |                    |----[6. Transfer]--->|                    |
+    |              3. DNS SVCB Discover        |                    |
     |                    |                     |                    |
-    |                    |                     |   7. ATS Verify    |
-    |                    |                     |   8. ATK Verify    |
+    |                    |--[4. Transfer]----->|                    |
+    |                    |   TLS 1.3 + POST    |                    |
     |                    |                     |                    |
-    |<---[202 Accepted]--|                     |---[9. Deliver]--->|
+    |                    |               5. ATS+ATK Query (DNS)    |
+    |                    |               6. Sender Authenticated   |
+    |                    |                     |                    |
+    |<---[202 Accepted]--|                     |---[7. Deliver]--->|
     |                    |                     |                    |
 ```
 
