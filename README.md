@@ -7,7 +7,6 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![IETF Draft](https://img.shields.io/badge/IETF-draft--li--atp-orange.svg)](https://datatracker.ietf.org/doc/draft-li-atp/)
-[![Tests](https://img.shields.io/badge/tests-195%20passed-brightgreen.svg)]()
 
 A communication protocol for agent-to-agent transfer.<br>
 DNS-based discovery, mandatory Ed25519 signing, server-mediated delivery.

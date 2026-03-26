@@ -3,18 +3,29 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "atp"
+name = "agent-transfer-protocol"
 version = "1.0.0a1"
-description = "Agent Transfer Protocol — secure agent-to-agent communication"
+description = "Agent Transfer Protocol (ATP): secure agent-to-agent communication"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
-authors = [
-    { name = "Xiang Li" },
-    { name = "Lu Sun" },
-    { name = "Yuqi Qiu" },
+keywords = ["agent", "protocol", "atp", "agent-to-agent", "dns", "ed25519"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Communications",
+    "Topic :: Security :: Cryptography",
+    "Topic :: Internet",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
-
+authors = [
+    { name = "Xiang Li", email = "lixiang@nankai.edu.cn" },
+    { name = "Lu Sun", email = "sunlu25@mail.nankai.edu.cn" },
+    { name = "Yuqi Qiu", email = "qiuyuqi@mail.nankai.edu.cn" },
+]
 dependencies = [
     "cryptography>=43.0",
     "dnspython>=2.7",
@@ -23,6 +34,12 @@ dependencies = [
     "starlette>=0.45",
     "click>=8.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/AospLab/atp"
+Documentation = "https://atp.readthedocs.io"
+Repository = "https://github.com/AospLab/atp"
+"IETF Draft" = "https://datatracker.ietf.org/doc/draft-li-atp/"
 
 [project.optional-dependencies]
 dev = [
