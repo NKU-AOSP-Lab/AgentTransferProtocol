@@ -372,6 +372,45 @@ class TestHealth:
         assert "version" in data
 
 
+class TestRegister:
+    def test_register_new_agent(self, client):
+        resp = client.post(
+            "/.well-known/atp/v1/register",
+            json={"agent_id": "newbot@test.local", "password": "newpass"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["status"] == "registered"
+
+    def test_register_duplicate_returns_409(self, client):
+        # agent@test.local is already registered in the fixture
+        resp = client.post(
+            "/.well-known/atp/v1/register",
+            json={"agent_id": "agent@test.local", "password": "anypass"},
+        )
+        assert resp.status_code == 409
+
+    def test_register_missing_fields_returns_400(self, client):
+        resp = client.post(
+            "/.well-known/atp/v1/register",
+            json={"agent_id": "bot@test.local"},
+        )
+        assert resp.status_code == 400
+
+    def test_register_invalid_json_returns_400(self, client):
+        resp = client.post(
+            "/.well-known/atp/v1/register",
+            content="not json",
+        )
+        assert resp.status_code == 400
+
+
+class TestAgentsList:
+    def test_list_agents(self, client):
+        resp = client.get("/.well-known/atp/v1/agents")
+        assert resp.status_code == 200
+        assert "agent@test.local" in resp.json()["agents"]
+
+
 # ---------------------------------------------------------------------------
 # Delivery manager tests
 # ---------------------------------------------------------------------------

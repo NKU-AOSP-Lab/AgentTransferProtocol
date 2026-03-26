@@ -89,7 +89,7 @@ class ATPServer:
         # Transport (lazy import to avoid circular deps)
         from atp.client.transport import HTTPTransport
 
-        transport = HTTPTransport(tls_verify=not self.config.local_mode)
+        transport = HTTPTransport(no_verify=self.config.local_mode)
 
         # Delivery manager
         self.delivery_manager = DeliveryManager(

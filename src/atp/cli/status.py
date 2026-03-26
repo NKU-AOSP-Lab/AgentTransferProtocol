@@ -4,22 +4,29 @@ import click
 
 
 @click.command("status")
-@click.option("--server", default="localhost:7443", help="Server URL (host:port)")
-@click.option("--local", is_flag=True, help="Disable TLS verification")
+@click.option("--server", required=True, help="Server address (host:port)")
+@click.option("--no-verify", is_flag=True, help="Skip TLS certificate verification")
 @click.option("--output", type=click.Choice(["json", "text"]), default="text")
-def status_cmd(server, local, output):
+def status_cmd(server, no_verify, output):
     """Show ATP server status and metrics."""
     import httpx
+    from atp.client.transport import parse_server_url
+
+    base_url, is_https = parse_server_url(server)
+
+    # Warn if HTTP
+    if not is_https and not no_verify:
+        click.echo("WARNING: Connection is not encrypted.")
+        if not click.confirm("Continue?"):
+            raise SystemExit(0)
 
     async def _status():
-        parts = server.split(":")
-        host = parts[0]
-        port = parts[1] if len(parts) > 1 else "7443"
+        verify = True
+        if no_verify or not is_https:
+            verify = False
 
-        base = f"https://{host}:{port}"
-        async with httpx.AsyncClient(verify=not local) as client:
-            # Get stats
-            stats_resp = await client.get(f"{base}/.well-known/atp/v1/stats")
+        async with httpx.AsyncClient(verify=verify) as client:
+            stats_resp = await client.get(f"{base_url}/.well-known/atp/v1/stats")
             return stats_resp.json()
 
     try:

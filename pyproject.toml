@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-transfer-protocol"
-version = "1.0.0a3"
+version = "1.0.0a6"
 description = "Agent Transfer Protocol (ATP): secure agent-to-agent communication"
 readme = "README.md"
 license = "MIT"
@@ -57,6 +57,7 @@ atp = "atp.cli.main:cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/atp"]
+artifacts = ["src/atp/skill.md"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

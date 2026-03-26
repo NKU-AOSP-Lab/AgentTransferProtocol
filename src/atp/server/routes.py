@@ -322,9 +322,59 @@ async def handle_inspect(request: Request) -> JSONResponse:
     return JSONResponse(result)
 
 
+async def handle_register(request: Request) -> JSONResponse:
+    """POST /.well-known/atp/v1/register
+
+    Register a new agent on this server.
+    Body: {"agent_id": "bot@example.com", "password": "secret"}
+    """
+    server = request.app.state.server
+
+    try:
+        body = await request.body()
+        data = json.loads(body.decode("utf-8"))
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    agent_id = data.get("agent_id")
+    password = data.get("password")
+
+    if not agent_id or not password:
+        return JSONResponse({"error": "Missing agent_id or password"}, status_code=400)
+
+    if not hasattr(server, "agent_store") or server.agent_store is None:
+        return JSONResponse({"error": "Agent registration not available"}, status_code=503)
+
+    try:
+        record = server.agent_store.register(agent_id, password)
+        logger.info(f"Agent registered: {agent_id}")
+        return JSONResponse(
+            {"status": "registered", "agent_id": agent_id},
+            status_code=201,
+        )
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+
+
+async def handle_agents(request: Request) -> JSONResponse:
+    """GET /.well-known/atp/v1/agents
+
+    List registered agents.
+    """
+    server = request.app.state.server
+
+    if not hasattr(server, "agent_store") or server.agent_store is None:
+        return JSONResponse({"agents": []})
+
+    agents = server.agent_store.list_agents()
+    return JSONResponse({"agents": [a.agent_id for a in agents]})
+
+
 def get_routes() -> list[Route]:
     return [
         Route("/.well-known/atp/v1/message", handle_message, methods=["POST"]),
+        Route("/.well-known/atp/v1/register", handle_register, methods=["POST"]),
+        Route("/.well-known/atp/v1/agents", handle_agents, methods=["GET"]),
         Route("/.well-known/atp/v1/messages", handle_recv, methods=["GET"]),
         Route("/.well-known/atp/v1/capabilities", handle_capabilities, methods=["GET"]),
         Route("/.well-known/atp/v1/health", handle_health, methods=["GET"]),

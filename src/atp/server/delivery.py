@@ -93,7 +93,8 @@ class DeliveryManager:
             if not server_info:
                 logger.error(f"Cannot discover server for {target.domain}")
                 return False
-            result = await self._transport.post_message(server_info, message)
+            base_url = f"https://{server_info.host}:{server_info.port}"
+            result = await self._transport.post_message(base_url, message)
             return result.success
         except Exception as e:
             logger.error(f"Transfer failed for {message.nonce}: {e}")

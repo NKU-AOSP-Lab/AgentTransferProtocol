@@ -9,11 +9,12 @@ from atp.cli.keys import keys_group
 from atp.cli.recv import recv_cmd
 from atp.cli.send import send_cmd
 from atp.cli.server import server_group
+from atp.cli.skill import skill_cmd
 from atp.cli.status import status_cmd
 
 
 @click.group()
-@click.version_option(version="1.0.0a1", prog_name="atp")
+@click.version_option(version="1.0.0a6", prog_name="atp")
 def cli():
     """ATP - Agent Transfer Protocol CLI"""
     pass
@@ -27,3 +28,4 @@ cli.add_command(keys_group, "keys")
 cli.add_command(dns_group, "dns")
 cli.add_command(status_cmd, "status")
 cli.add_command(inspect_cmd, "inspect")
+cli.add_command(skill_cmd, "skill")

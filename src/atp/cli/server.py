@@ -13,9 +13,7 @@ def server_group():
 @click.option("--domain", required=True, help="Server domain name")
 @click.option("--port", default=7443, type=int, help="Listen port")
 @click.option("--host", default="0.0.0.0", help="Bind address")
-@click.option("--local", is_flag=True, help="Use local file-based discovery")
-@click.option("--peers", type=click.Path(), help="Path to peers.toml")
-@click.option("--dns-override", type=click.Path(), help="Path to dns_override.toml")
+@click.option("--no-verify", is_flag=True, help="Skip TLS verification for outbound connections")
 @click.option("--cert", type=click.Path(), help="TLS certificate path")
 @click.option("--key", "tls_key", type=click.Path(), help="TLS private key path")
 @click.option(
@@ -23,7 +21,7 @@ def server_group():
     default="INFO",
     type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]),
 )
-def start_cmd(domain, port, host, local, peers, dns_override, cert, tls_key, log_level):
+def start_cmd(domain, port, host, no_verify, cert, tls_key, log_level):
     """Start the ATP server."""
     from atp.server.app import ATPServer
     from atp.server.config import RuntimeServerConfig
@@ -36,9 +34,7 @@ def start_cmd(domain, port, host, local, peers, dns_override, cert, tls_key, log
         "domain": domain,
         "port": port,
         "host": host,
-        "local": local,
-        "peers": peers,
-        "dns_override": dns_override,
+        "local": no_verify,
         "cert": cert,
         "key": tls_key,
         "log_level": log_level,

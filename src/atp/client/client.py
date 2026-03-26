@@ -3,43 +3,49 @@
 import asyncio
 from pathlib import Path
 
-from atp.client.transport import HTTPTransport
+from atp.client.transport import HTTPTransport, parse_server_url
 from atp.core.message import ATPMessage
 from atp.core.signature import Signer
-from atp.discovery.dns import ServerInfo
 from atp.storage.config import ConfigStorage
 from atp.storage.keys import KeyStorage
+
+
+def _extract_domain(server: str) -> str:
+    """Extract the domain/host from a server string (strip scheme and port)."""
+    domain = server
+    for prefix in ("https://", "http://"):
+        if domain.startswith(prefix):
+            domain = domain[len(prefix) :]
+    domain = domain.split(":")[0]
+    return domain
+
+
+def _auto_complete_agent_id(agent_id: str, server: str) -> str:
+    """If agent_id has no '@', append @domain from server."""
+    if "@" not in agent_id:
+        domain = _extract_domain(server)
+        return f"{agent_id}@{domain}"
+    return agent_id
 
 
 class ATPClient:
     def __init__(
         self,
         agent_id: str,
+        server: str,
         config_dir: Path | None = None,
-        server_url: str | None = None,
-        local_mode: bool = False,
+        no_verify: bool = False,
         password: str | None = None,
     ):
-        self._agent_id = agent_id
+        self._server = server
+        self._base_url, self._is_https = parse_server_url(server)
+        self._agent_id = _auto_complete_agent_id(agent_id, server)
         self._password = password
         self._config_storage = ConfigStorage(config_dir)
         self._config = self._config_storage.load()
-        self._server_url = server_url
-        self._local_mode = local_mode
-        self._transport = HTTPTransport(tls_verify=not local_mode)
+        self._no_verify = no_verify
+        self._transport = HTTPTransport(no_verify=no_verify)
         self._keys = KeyStorage(self._config_storage.config_dir / "keys")
-
-    def _get_server_info(self) -> ServerInfo:
-        """Get server connection info from server_url or config."""
-        if self._server_url:
-            # Parse "host:port" or "host"
-            parts = self._server_url.split(":")
-            host = parts[0]
-            port = int(parts[1]) if len(parts) > 1 else 7443
-        else:
-            host = "localhost"
-            port = self._config.server.port or 7443
-        return ServerInfo(host=host, port=port)
 
     async def send(
         self,
@@ -66,9 +72,8 @@ class ATPClient:
         signer.sign(msg)
 
         # Send
-        server_info = self._get_server_info()
         auth = (self._agent_id, self._password) if self._password else None
-        result = await self._transport.post_message(server_info, msg, auth=auth)
+        result = await self._transport.post_message(self._base_url, msg, auth=auth)
 
         if result.success:
             return {"status": "accepted", "nonce": msg.nonce, "timestamp": msg.timestamp}
@@ -85,9 +90,8 @@ class ATPClient:
         wait: bool = False,
         timeout: float = 30.0,
     ) -> list[ATPMessage]:
-        """Receive messages from local server. Requires Credential authentication."""
-        server_info = self._get_server_info()
-        url = f"https://{server_info.host}:{server_info.port}/.well-known/atp/v1/messages"
+        """Receive messages from server. Requires Credential authentication."""
+        url = f"{self._base_url}/.well-known/atp/v1/messages"
         params = {"limit": str(limit)}
 
         # Build auth headers

@@ -12,13 +12,14 @@ import click
 @click.option("--body", "-b", default=None, help="Message body")
 @click.option("--subject", "-s", default=None, help="Message subject")
 @click.option("--payload", "-p", type=click.Path(exists=True), help="JSON payload file")
-@click.option("--server", default=None, help="Server URL (host:port)")
-@click.option("--local", is_flag=True, help="Use local mode (no TLS verify)")
+@click.option("--server", required=True, help="Server address (host:port)")
+@click.option("--no-verify", is_flag=True, help="Skip TLS certificate verification")
 @click.option("--password", "-P", default=None, help="Agent password for authentication")
 @click.option("--output", type=click.Choice(["json", "text"]), default="json")
-def send_cmd(to, from_id, body, subject, payload, server, local, password, output):
+def send_cmd(to, from_id, body, subject, payload, server, no_verify, password, output):
     """Send an ATP message."""
     from atp.client.client import ATPClient
+    from atp.client.transport import parse_server_url
     from atp.storage.config import ConfigStorage
 
     if from_id is None:
@@ -28,6 +29,13 @@ def send_cmd(to, from_id, body, subject, payload, server, local, password, outpu
             raise click.ClickException(
                 "No sender specified. Use --from or set agent_id in config."
             )
+
+    # Warn if HTTP
+    _, is_https = parse_server_url(server)
+    if not is_https and not no_verify:
+        click.echo("WARNING: Connection is not encrypted.")
+        if not click.confirm("Continue?"):
+            raise SystemExit(0)
 
     # Build payload
     msg_payload: dict = {}
@@ -41,7 +49,7 @@ def send_cmd(to, from_id, body, subject, payload, server, local, password, outpu
             msg_payload["subject"] = subject
 
     async def _send():
-        client = ATPClient(agent_id=from_id, server_url=server, local_mode=local, password=password)
+        client = ATPClient(agent_id=from_id, server=server, no_verify=no_verify, password=password)
         try:
             result = await client.send(to, payload=msg_payload)
             return result
