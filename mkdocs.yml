@@ -1,0 +1,62 @@
+site_name: ATP — Agent Transfer Protocol
+site_description: Secure agent-to-agent communication over the Internet
+site_url: https://atp.readthedocs.io/
+
+repo_url: https://github.com/AospLab/atp
+repo_name: AospLab/atp
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Quick Start: quickstart.md
+    - Configuration: configuration.md
+    - DNS Setup: dns-setup.md
+  - Guide:
+    - Security Model: security.md
+    - Python SDK: sdk.md
+  - Development:
+    - Architecture: architecture.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - def_list
+
+plugins:
+  - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/AospLab/atp
