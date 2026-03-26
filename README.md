@@ -9,7 +9,7 @@
 [![IETF Draft](https://img.shields.io/badge/IETF-draft--li--atp-orange.svg)](https://datatracker.ietf.org/doc/draft-li-atp/)
 [![Tests](https://img.shields.io/badge/tests-195%20passed-brightgreen.svg)]()
 
-A communication protocol for the Internet of Agents.<br>
+A communication protocol for agent-to-agent transfer.<br>
 DNS-based discovery, mandatory Ed25519 signing, server-mediated delivery.
 
 ```
