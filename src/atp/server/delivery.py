@@ -22,6 +22,7 @@ class DeliveryManager:
         signer: Signer,
         server_domain: str,
         max_retries: int = 6,
+        metrics=None,
     ):
         self._store = message_store
         self._resolver = dns_resolver
@@ -29,6 +30,7 @@ class DeliveryManager:
         self._signer = signer
         self._domain = server_domain
         self._max_retries = max_retries
+        self._metrics = metrics
         self._task: asyncio.Task | None = None
         self._running = False
 
@@ -66,13 +68,19 @@ class DeliveryManager:
         success = await self.transfer(message)
         if success:
             self._store.update_status(stored.nonce, MessageStatus.DELIVERED)
+            if self._metrics:
+                self._metrics.record_delivery_success()
             logger.info(f"Delivered {stored.nonce} to {stored.to_id}")
         else:
             if stored.retry_count >= self._max_retries:
                 self._store.update_status(stored.nonce, MessageStatus.BOUNCED, error="Max retries exceeded")
+                if self._metrics:
+                    self._metrics.record_bounced()
                 await self._send_bounce(message, "Max retries exceeded")
                 logger.warning(f"Bounced {stored.nonce}: max retries exceeded")
             else:
+                if self._metrics:
+                    self._metrics.record_delivery_failed()
                 delay = self._next_retry_delay(stored.retry_count)
                 self._store.mark_retry(stored.nonce, int(time.time()) + delay)
                 logger.info(f"Retry {stored.nonce} in {delay}s (attempt {stored.retry_count + 1})")

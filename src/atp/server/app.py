@@ -9,6 +9,7 @@ from atp.server.config import RuntimeServerConfig
 from atp.server.routes import get_routes
 from atp.server.queue import MessageQueue
 from atp.server.delivery import DeliveryManager
+from atp.server.metrics import ServerMetrics
 from atp.security.ats import ATSVerifier
 from atp.security.atk import ATKVerifier
 from atp.security.replay import ReplayGuard
@@ -32,6 +33,7 @@ class ATPServer:
         self.atk_verifier: ATKVerifier | None = None
         self.replay_guard: ReplayGuard | None = None
         self.delivery_manager: DeliveryManager | None = None
+        self.metrics: ServerMetrics | None = None
         self.signer: Signer | None = None
         self._config_storage: ConfigStorage | None = None
 
@@ -75,6 +77,9 @@ class ATPServer:
             private_key = key_storage.load_private_key(self.config.key_selector)
         self.signer = Signer(private_key, self.config.key_selector, self.config.domain)
 
+        # Metrics
+        self.metrics = ServerMetrics()
+
         # Transport (lazy import to avoid circular deps)
         from atp.client.transport import HTTPTransport
 
@@ -88,6 +93,7 @@ class ATPServer:
             signer=self.signer,
             server_domain=self.config.domain,
             max_retries=self.config.retry_max_attempts,
+            metrics=self.metrics,
         )
 
         # Starlette app

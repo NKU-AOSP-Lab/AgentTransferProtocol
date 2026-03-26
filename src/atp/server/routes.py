@@ -1,6 +1,7 @@
 """HTTP route handlers for the ATP server."""
 
 import json
+import sqlite3
 import time
 import logging
 
@@ -56,6 +57,7 @@ async def handle_message(request: Request) -> JSONResponse:
 
         # 5. ATS verify
         ats_result = await server.ats_verifier.verify(sender_domain, source_ip)
+        server.metrics.record_ats(ats_result.status)
         if ats_result.status == "FAIL":
             return JSONResponse(
                 status_code=403,
@@ -68,6 +70,7 @@ async def handle_message(request: Request) -> JSONResponse:
 
         # 6. ATK verify
         atk_result = await server.atk_verifier.verify(message)
+        server.metrics.record_atk(atk_result.passed)
         if not atk_result.passed:
             return JSONResponse(
                 status_code=403,
@@ -80,6 +83,7 @@ async def handle_message(request: Request) -> JSONResponse:
 
         # 7. Replay check
         if not server.replay_guard.check(message.nonce, message.timestamp):
+            server.metrics.record_replay_blocked()
             return JSONResponse(
                 status_code=400,
                 content={"error": "Replay detected"},
@@ -94,12 +98,16 @@ async def handle_message(request: Request) -> JSONResponse:
                 content={"error": "Invalid recipient ID", "details": str(exc)},
             )
 
+        server.metrics.record_message_received()
+
         if to_domain == server.config.domain:
             # Local delivery
             await server.queue.enqueue(message, MessageStatus.DELIVERED)
+            server.metrics.record_local_delivery()
         else:
             # Remote: queue for delivery manager
             await server.queue.enqueue(message, MessageStatus.QUEUED)
+            server.metrics.record_forwarded()
 
         # 9. Accepted
         return JSONResponse(
@@ -177,10 +185,77 @@ async def handle_health(request: Request) -> JSONResponse:
     })
 
 
+async def handle_stats(request: Request) -> JSONResponse:
+    """GET /.well-known/atp/v1/stats
+    Returns server metrics + queue status from DB.
+    """
+    server = request.app.state.server
+    metrics = server.metrics.to_dict()
+
+    # Add queue counts from database
+    store = server.queue._store
+    # Query counts by status
+    conn = sqlite3.connect(str(store._db_path))
+    cursor = conn.execute(
+        "SELECT status, COUNT(*) FROM messages GROUP BY status"
+    )
+    queue_counts = dict(cursor.fetchall())
+    conn.close()
+
+    metrics["queue"] = {
+        "queued": queue_counts.get("queued", 0),
+        "delivering": queue_counts.get("delivering", 0),
+        "delivered": queue_counts.get("delivered", 0),
+        "failed": queue_counts.get("failed", 0),
+        "bounced": queue_counts.get("bounced", 0),
+    }
+
+    # Add agent list
+    conn = sqlite3.connect(str(store._db_path))
+    cursor = conn.execute(
+        "SELECT DISTINCT to_id FROM messages WHERE status = 'delivered'"
+    )
+    metrics["agents"] = [row[0] for row in cursor.fetchall()]
+    conn.close()
+
+    metrics["domain"] = server.config.domain
+
+    return JSONResponse(metrics)
+
+
+async def handle_inspect(request: Request) -> JSONResponse:
+    """GET /.well-known/atp/v1/inspect?nonce=<nonce>
+    Returns detailed status of a specific message.
+    """
+    server = request.app.state.server
+    nonce = request.query_params.get("nonce")
+    if not nonce:
+        return JSONResponse({"error": "Missing 'nonce' parameter"}, status_code=400)
+
+    stored = server.queue._store.get_by_nonce(nonce)
+    if not stored:
+        return JSONResponse({"error": f"Message {nonce} not found"}, status_code=404)
+
+    result = {
+        "nonce": stored.nonce,
+        "from": stored.from_id,
+        "to": stored.to_id,
+        "status": stored.status.value,
+        "created_at": stored.created_at,
+        "updated_at": stored.updated_at,
+        "retry_count": stored.retry_count,
+        "next_retry_at": stored.next_retry_at,
+        "error": stored.error,
+    }
+    return JSONResponse(result)
+
+
 def get_routes() -> list[Route]:
     return [
         Route("/.well-known/atp/v1/message", handle_message, methods=["POST"]),
         Route("/.well-known/atp/v1/messages", handle_recv, methods=["GET"]),
         Route("/.well-known/atp/v1/capabilities", handle_capabilities, methods=["GET"]),
         Route("/.well-known/atp/v1/health", handle_health, methods=["GET"]),
+        Route("/.well-known/atp/v1/stats", handle_stats, methods=["GET"]),
+        Route("/.well-known/atp/v1/inspect", handle_inspect, methods=["GET"]),
     ]

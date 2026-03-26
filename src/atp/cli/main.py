@@ -3,10 +3,12 @@
 import click
 
 from atp.cli.dns import dns_group
+from atp.cli.inspect import inspect_cmd
 from atp.cli.keys import keys_group
 from atp.cli.recv import recv_cmd
 from atp.cli.send import send_cmd
 from atp.cli.server import server_group
+from atp.cli.status import status_cmd
 
 
 @click.group()
@@ -21,3 +23,5 @@ cli.add_command(send_cmd, "send")
 cli.add_command(recv_cmd, "recv")
 cli.add_command(keys_group, "keys")
 cli.add_command(dns_group, "dns")
+cli.add_command(status_cmd, "status")
+cli.add_command(inspect_cmd, "inspect")

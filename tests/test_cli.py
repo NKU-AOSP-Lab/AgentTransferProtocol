@@ -60,6 +60,16 @@ def test_keys_generate(runner, tmp_path, monkeypatch):
     assert "generated" in result.output.lower() or "Key pair" in result.output
 
 
+def test_status_help(runner):
+    result = runner.invoke(cli, ["status", "--help"])
+    assert result.exit_code == 0
+
+
+def test_inspect_help(runner):
+    result = runner.invoke(cli, ["inspect", "--help"])
+    assert result.exit_code == 0
+
+
 def test_dns_generate(runner, tmp_path, monkeypatch):
     """Test DNS record generation."""
     import pathlib

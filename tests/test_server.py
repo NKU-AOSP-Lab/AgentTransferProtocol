@@ -13,6 +13,7 @@ from atp.server.config import RuntimeServerConfig
 from atp.server.routes import get_routes
 from atp.server.queue import MessageQueue
 from atp.server.delivery import DeliveryManager
+from atp.server.metrics import ServerMetrics
 from atp.core.message import ATPMessage
 from atp.core.signature import Signer, VerifyResult
 from atp.security.ats import ATSResult
@@ -79,6 +80,9 @@ def mock_server(tmp_path):
     # Queue with real MessageStore (thread-safe for TestClient)
     store = _make_thread_safe_store(tmp_path / "test.db")
     server.queue = MessageQueue(store)
+
+    # Metrics
+    server.metrics = ServerMetrics()
 
     return server
 
@@ -439,3 +443,71 @@ class TestDeliveryManager:
         await dm._deliver_one(stored)
         updated = store.get_by_nonce(msg.nonce)
         assert updated.status == MessageStatus.BOUNCED
+
+
+# ---------------------------------------------------------------------------
+# Stats / Inspect route tests
+# ---------------------------------------------------------------------------
+
+class TestHandleStats:
+    def test_stats_endpoint(self, client, mock_server, signer):
+        # Post a valid message first
+        msg = _make_signed_message(signer, to_id="bot@test.local")
+        resp = client.post("/.well-known/atp/v1/message", content=msg.to_json())
+        assert resp.status_code == 202
+
+        # Now get stats
+        resp = client.get("/.well-known/atp/v1/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        # Verify all expected top-level keys
+        assert "messages" in data
+        assert "security" in data
+        assert "queue" in data
+        assert "domain" in data
+        assert "agents" in data
+        assert "uptime" in data
+
+        # Domain should match server config
+        assert data["domain"] == "test.local"
+
+        # Messages should show at least 1 received
+        assert data["messages"]["received"] >= 1
+
+        # Security should have counts
+        assert data["security"]["ats_pass"] >= 1
+        assert data["security"]["atk_pass"] >= 1
+
+        # Queue should have delivered count
+        assert data["queue"]["delivered"] >= 1
+
+        # Agents should include the recipient
+        assert "bot@test.local" in data["agents"]
+
+
+class TestHandleInspect:
+    def test_inspect_found(self, client, mock_server, signer):
+        # Post a message first
+        msg = _make_signed_message(signer, to_id="bot@test.local")
+        resp = client.post("/.well-known/atp/v1/message", content=msg.to_json())
+        assert resp.status_code == 202
+
+        # Inspect by nonce
+        resp = client.get(f"/.well-known/atp/v1/inspect?nonce={msg.nonce}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["nonce"] == msg.nonce
+        assert data["from"] == msg.from_id
+        assert data["to"] == msg.to_id
+        assert data["status"] == "delivered"
+
+    def test_inspect_not_found(self, client):
+        resp = client.get("/.well-known/atp/v1/inspect?nonce=nonexistent")
+        assert resp.status_code == 404
+        assert "not found" in resp.json()["error"].lower()
+
+    def test_inspect_missing_param(self, client):
+        resp = client.get("/.well-known/atp/v1/inspect")
+        assert resp.status_code == 400
+        assert "nonce" in resp.json()["error"].lower()
