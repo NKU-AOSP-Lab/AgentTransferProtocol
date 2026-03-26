@@ -170,16 +170,44 @@ async def handle_message(request: Request) -> JSONResponse:
 async def handle_recv(request: Request) -> JSONResponse:
     """GET /.well-known/atp/v1/messages
 
-    Retrieve delivered messages for an agent.
+    Retrieve delivered messages for an agent. Requires Credential authentication.
+    The authenticated agent can only read their own messages.
     """
     server = request.app.state.server
 
-    agent_id = request.query_params.get("agent_id")
-    if not agent_id:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "Missing required parameter: agent_id"},
-        )
+    # Credential authentication required
+    if hasattr(server, 'agent_store') and server.agent_store is not None:
+        auth_header = request.headers.get("authorization", "")
+        if not auth_header.startswith("Basic "):
+            return JSONResponse(
+                {"error": "Credential required"},
+                status_code=401,
+            )
+        try:
+            decoded = base64.b64decode(auth_header[6:]).decode()
+            auth_agent_id, auth_password = decoded.split(":", 1)
+        except Exception:
+            return JSONResponse(
+                {"error": "Invalid Authorization header"},
+                status_code=401,
+            )
+
+        if not server.agent_store.verify(auth_agent_id, auth_password):
+            return JSONResponse(
+                {"error": "Credential verification failed"},
+                status_code=401,
+            )
+
+        # Use authenticated agent_id (ignore query param to prevent reading others' messages)
+        agent_id = auth_agent_id
+    else:
+        # No agent store configured, fall back to query param
+        agent_id = request.query_params.get("agent_id")
+        if not agent_id:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Missing required parameter: agent_id"},
+            )
 
     limit_str = request.query_params.get("limit", "50")
     try:

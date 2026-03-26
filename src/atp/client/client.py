@@ -85,10 +85,19 @@ class ATPClient:
         wait: bool = False,
         timeout: float = 30.0,
     ) -> list[ATPMessage]:
-        """Receive messages from local server."""
+        """Receive messages from local server. Requires Credential authentication."""
         server_info = self._get_server_info()
         url = f"https://{server_info.host}:{server_info.port}/.well-known/atp/v1/messages"
-        params = {"agent_id": self._agent_id, "limit": str(limit)}
+        params = {"limit": str(limit)}
+
+        # Build auth headers
+        headers = {}
+        if self._password:
+            import base64 as b64
+            cred = b64.b64encode(f"{self._agent_id}:{self._password}".encode()).decode()
+            headers["Authorization"] = f"Basic {cred}"
+        else:
+            params["agent_id"] = self._agent_id
 
         client = self._transport._get_client()
 
@@ -96,7 +105,7 @@ class ATPClient:
             loop = asyncio.get_event_loop()
             deadline = loop.time() + timeout
             while loop.time() < deadline:
-                resp = await client.get(url, params=params)
+                resp = await client.get(url, params=params, headers=headers)
                 data = resp.json()
                 messages = data.get("messages", [])
                 if messages:
@@ -104,7 +113,7 @@ class ATPClient:
                 await asyncio.sleep(2)
             return []
         else:
-            resp = await client.get(url, params=params)
+            resp = await client.get(url, params=params, headers=headers)
             data = resp.json()
             messages = data.get("messages", [])
             return [ATPMessage.from_dict(m) for m in messages]

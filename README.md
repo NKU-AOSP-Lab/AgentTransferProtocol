@@ -59,11 +59,12 @@ pip install agent-transfer-protocol
 ## Quick Start
 
 ```bash
-# 1. Start a server (keys are auto-generated if not present)
+# 1. Start a server
 atp server start --domain example.com --port 7443 --local
 
-# 2. Register an agent on the server
+# 2. Register an agent (will prompt for password)
 atp agent register mybot@example.com
+# Or non-interactively: atp agent register mybot@example.com -p <password>
 
 # 3. Send a message (from another terminal)
 atp send agent@remote.org \
@@ -76,7 +77,6 @@ atp send agent@remote.org \
 atp status --server localhost:7443 --local
 ```
 
-> Server-side Ed25519 keys are managed automatically. Use `atp keys generate` only if you need manual control.
 
 ### Try It: Two Servers Talking
 
@@ -89,9 +89,9 @@ atp server start --domain alice.local --port 7443 --local --peers peers.toml
 # Terminal 2: Start Server B
 atp server start --domain bob.local --port 7444 --local --peers peers.toml
 
-# Register agents
-atp agent register agent@alice.local
-atp agent register agent@bob.local
+# Register agents (will prompt for password, or use -p)
+atp agent register agent@alice.local -p alice_pass
+atp agent register agent@bob.local -p bob_pass
 
 # Terminal 3: Alice sends to Bob
 atp send agent@bob.local \
@@ -101,8 +101,8 @@ atp send agent@bob.local \
   --local \
   --body "Hello Bob!"
 
-# Terminal 4: Bob receives
-atp recv --agent-id agent@bob.local --server localhost:7444 --local
+# Terminal 4: Bob receives (with credential)
+atp recv --agent-id agent@bob.local -P bob_pass --server localhost:7444 --local
 ```
 
 <details>
@@ -124,7 +124,7 @@ port = 7444
 
 ```python
 import asyncio
-from atp.client.client import ATPClient
+from atp.client import ATPClient
 
 async def main():
     client = ATPClient(
@@ -154,7 +154,7 @@ asyncio.run(main())
 
 | Command | Description |
 |---------|-------------|
-| `atp server start` | Start ATP server (auto-generates keys if needed) |
+| `atp server start` | Start ATP server |
 | `atp send <to>` | Send a message |
 | `atp recv` | Receive messages |
 
@@ -168,9 +168,11 @@ asyncio.run(main())
 
 ### Key Management (Server)
 
+Ed25519 signing keys are auto-generated on first server startup. These commands are for manual control.
+
 | Command | Description |
 |---------|-------------|
-| `atp keys generate` | Generate Ed25519 key pair (usually auto-managed) |
+| `atp keys generate` | Generate Ed25519 key pair |
 | `atp keys show` | Show key info |
 | `atp keys list` | List all keys |
 | `atp keys rotate` | Rotate to a new key |

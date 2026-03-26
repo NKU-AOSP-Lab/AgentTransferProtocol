@@ -8,12 +8,13 @@ import click
 
 @click.command("recv")
 @click.option("--agent-id", default=None, help="Agent ID to receive for")
+@click.option("--password", "-P", default=None, help="Agent password for authentication")
 @click.option("--server", default=None, help="Server URL (host:port)")
 @click.option("--local", is_flag=True, help="Use local mode")
 @click.option("--wait", is_flag=True, help="Wait for messages")
 @click.option("--limit", default=50, type=int)
 @click.option("--output", type=click.Choice(["json", "text"]), default="json")
-def recv_cmd(agent_id, server, local, wait, limit, output):
+def recv_cmd(agent_id, password, server, local, wait, limit, output):
     """Receive ATP messages."""
     from atp.client.client import ATPClient
     from atp.storage.config import ConfigStorage
@@ -27,7 +28,7 @@ def recv_cmd(agent_id, server, local, wait, limit, output):
             )
 
     async def _recv():
-        client = ATPClient(agent_id=agent_id, server_url=server, local_mode=local)
+        client = ATPClient(agent_id=agent_id, password=password, server_url=server, local_mode=local)
         try:
             messages = await client.recv(limit=limit, wait=wait)
             return messages

@@ -306,29 +306,45 @@ class TestHandleMessage:
 
 
 class TestHandleRecv:
-    def test_get_messages_for_agent(self, client, mock_server, signer):
-        # Enqueue a delivered message first
-        msg = _make_signed_message(signer, to_id="bot@test.local")
+    def _auth_header(self, agent_id="agent@test.local", password="testpass"):
+        creds = base64.b64encode(f"{agent_id}:{password}".encode()).decode()
+        return {"Authorization": f"Basic {creds}"}
+
+    def test_get_messages_with_credential(self, client, mock_server, signer):
+        # Enqueue a delivered message for agent@test.local
+        msg = _make_signed_message(signer, to_id="agent@test.local")
         mock_server.queue._store.enqueue(msg, MessageStatus.DELIVERED)
 
-        resp = client.get("/.well-known/atp/v1/messages?agent_id=bot@test.local")
+        resp = client.get(
+            "/.well-known/atp/v1/messages",
+            headers=self._auth_header(),
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["count"] == 1
         assert data["messages"][0]["nonce"] == msg.nonce
 
-    def test_missing_agent_id_returns_400(self, client):
+    def test_recv_without_credential_returns_401(self, client):
         resp = client.get("/.well-known/atp/v1/messages")
-        assert resp.status_code == 400
+        assert resp.status_code == 401
+
+    def test_recv_wrong_credential_returns_401(self, client):
+        resp = client.get(
+            "/.well-known/atp/v1/messages",
+            headers=self._auth_header(password="wrongpass"),
+        )
+        assert resp.status_code == 401
 
     def test_after_id_parameter(self, client, mock_server, signer):
-        # Enqueue two messages
-        msg1 = _make_signed_message(signer, to_id="bot@test.local")
-        msg2 = _make_signed_message(signer, to_id="bot@test.local")
+        msg1 = _make_signed_message(signer, to_id="agent@test.local")
+        msg2 = _make_signed_message(signer, to_id="agent@test.local")
         id1 = mock_server.queue._store.enqueue(msg1, MessageStatus.DELIVERED)
         mock_server.queue._store.enqueue(msg2, MessageStatus.DELIVERED)
 
-        resp = client.get(f"/.well-known/atp/v1/messages?agent_id=bot@test.local&after_id={id1}")
+        resp = client.get(
+            f"/.well-known/atp/v1/messages?after_id={id1}",
+            headers=self._auth_header(),
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["count"] == 1

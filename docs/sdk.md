@@ -12,7 +12,7 @@ pip install atp
 
 ```python
 import asyncio
-from atp.client.client import ATPClient
+from atp.client import ATPClient
 
 async def main():
     client = ATPClient(
@@ -48,7 +48,7 @@ asyncio.run(main())
 High-level client for sending and receiving messages.
 
 ```python
-from atp.client.client import ATPClient
+from atp.client import ATPClient
 
 client = ATPClient(
     agent_id="bot@example.com",      # Your agent identity
