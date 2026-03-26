@@ -14,7 +14,7 @@ from atp.cli.status import status_cmd
 
 
 @click.group()
-@click.version_option(version="1.0.0a6", prog_name="atp")
+@click.version_option(version="1.0.0a7", prog_name="atp")
 def cli():
     """ATP - Agent Transfer Protocol CLI"""
     pass

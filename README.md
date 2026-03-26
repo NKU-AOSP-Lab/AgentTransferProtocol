@@ -60,23 +60,22 @@ pip install agent-transfer-protocol
 
 ```bash
 # 1. Start a server
-atp server start --domain example.com --port 7443 --local
+atp server start --domain example.com --port 7443
 
 # 2. Register an agent (will prompt for password)
-atp agent register mybot@example.com
-# Or non-interactively: atp agent register mybot@example.com -p <password>
+atp agent register mybot --server example.com
+# Or non-interactively: atp agent register mybot --server example.com -p mypassword
 
 # 3. Send a message (from another terminal)
 atp send agent@remote.org \
-  --from mybot@example.com \
-  --password <your-password> \
-  --server localhost:7443 --local \
+  --from mybot \
+  --password mypassword \
+  --server example.com \
   --body "Hello!"
 
 # 4. Check server status
-atp status --server localhost:7443 --local
+atp status --server example.com
 ```
-
 
 ### Try It: Two Servers Talking
 
@@ -84,41 +83,30 @@ Run two servers locally and send messages between them, no DNS needed:
 
 ```bash
 # Terminal 1: Start Server A
-atp server start --domain alice.local --port 7443 --local --peers peers.toml
+atp server start --domain alice.local --port 7443
 
 # Terminal 2: Start Server B
-atp server start --domain bob.local --port 7444 --local --peers peers.toml
+atp server start --domain bob.local --port 7444
 
-# Register agents (will prompt for password, or use -p)
-atp agent register agent@alice.local -p alice_pass
-atp agent register agent@bob.local -p bob_pass
+# Register agents
+atp agent register agent --server 127.0.0.1:7443 --no-verify -p alice_pass
+atp agent register agent --server 127.0.0.1:7444 --no-verify -p bob_pass
 
 # Terminal 3: Alice sends to Bob
 atp send agent@bob.local \
-  --from agent@alice.local \
-  --password <password> \
-  --server localhost:7443 \
-  --local \
+  --from agent \
+  --password alice_pass \
+  --server 127.0.0.1:7443 \
+  --no-verify \
   --body "Hello Bob!"
 
-# Terminal 4: Bob receives (with credential)
-atp recv --agent-id agent@bob.local -P bob_pass --server localhost:7444 --local
+# Terminal 4: Bob receives
+atp recv \
+  --agent-id agent \
+  --password bob_pass \
+  --server 127.0.0.1:7444 \
+  --no-verify
 ```
-
-<details>
-<summary><code>peers.toml</code></summary>
-
-```toml
-["alice.local"]
-host = "127.0.0.1"
-port = 7443
-
-["bob.local"]
-host = "127.0.0.1"
-port = 7444
-```
-
-</details>
 
 ## Python SDK
 
@@ -128,10 +116,9 @@ from atp.client import ATPClient
 
 async def main():
     client = ATPClient(
-        agent_id="mybot@example.com",
-        password="your-password",
-        server_url="localhost:7443",
-        local_mode=True,
+        agent_id="mybot",
+        password="mypassword",
+        server="example.com",
     )
 
     # Send
@@ -162,9 +149,8 @@ asyncio.run(main())
 
 | Command | Description |
 |---------|-------------|
-| `atp agent register <id>` | Register an agent with credentials |
+| `atp agent register <name>` | Register an agent with credentials |
 | `atp agent list` | List registered agents |
-| `atp agent remove <id>` | Remove an agent |
 
 ### Key Management (Server)
 
@@ -193,6 +179,19 @@ Ed25519 signing keys are auto-generated on first server startup. These commands 
 
 Run `atp <command> --help` for options.
 
+## Connection Options
+
+| `--server` format | Protocol | Port |
+|-------------------|----------|------|
+| `example.com` | HTTPS | 7443 (default) |
+| `example.com:8443` | HTTPS | 8443 |
+| `https://example.com` | HTTPS | 7443 |
+| `http://example.com` | HTTP (warns) | 7443 |
+
+- Default: verify TLS certificates. Invalid cert prompts for confirmation.
+- `--no-verify`: skip certificate verification silently.
+- Agent names without `@` are auto-completed with the server domain.
+
 ## Production Deployment
 
 For production, configure DNS records. ATP generates them for you:
@@ -214,7 +213,7 @@ See the [DNS Setup Guide](docs/dns-setup.md) for details.
 
 ## Security
 
-ATP provides three layers of security, inspired by email's battle-tested approach:
+ATP provides four layers of security, inspired by email's battle-tested approach:
 
 | Layer | ATP | Email Equivalent | Purpose |
 |-------|-----|-----------------|---------|
@@ -252,7 +251,7 @@ ATP is defined as an IETF Internet-Draft (Standards Track):
 git clone https://github.com/NKU-AOSP-Lab/AgentTransferProtocol.git
 cd atp
 pip install -e ".[dev]"
-python -m pytest tests/ -v    # 212 tests
+python -m pytest tests/ -v    # 227 tests
 ```
 
 See [Architecture](docs/architecture.md) for module design and development guide.

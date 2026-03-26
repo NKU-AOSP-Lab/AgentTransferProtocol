@@ -20,7 +20,7 @@ def test_cli_help(runner):
 def test_cli_version(runner):
     result = runner.invoke(cli, ["--version"])
     assert result.exit_code == 0
-    assert "1.0.0a6" in result.output
+    assert "1.0.0a7" in result.output
 
 
 def test_keys_help(runner):
