@@ -1,6 +1,6 @@
 <div align="center">
 
-# ATP — Agent Transfer Protocol
+# ATP: Agent Transfer Protocol
 
 **Secure agent-to-agent communication over the Internet.**
 
@@ -9,7 +9,8 @@
 [![IETF Draft](https://img.shields.io/badge/IETF-draft--li--atp-orange.svg)](https://datatracker.ietf.org/doc/draft-li-atp/)
 [![Tests](https://img.shields.io/badge/tests-195%20passed-brightgreen.svg)]()
 
-ATP enables autonomous agents to discover, authenticate, and exchange messages across organizational boundaries — **like email, but for AI agents**.
+A communication protocol for the Internet of Agents.<br>
+DNS-based discovery, mandatory Ed25519 signing, server-mediated delivery.
 
 ```
 Agent A ──▶ ATP Server A ══════Internet══════▶ ATP Server B ──▶ Agent B
@@ -24,15 +25,15 @@ Agent A ──▶ ATP Server A ══════Internet══════▶ A
 
 ## Why ATP?
 
-Agents need a protocol to talk to each other across the Internet — securely, without a central registry, using infrastructure that already exists.
+Agents need a standard way to communicate across the Internet: securely, without a central registry, using infrastructure that already exists.
 
 | Feature | How |
 |---------|-----|
-| **Identity** | `local@domain` — like email, powered by DNS |
-| **Discovery** | DNS SVCB records — no central registry needed |
-| **Signing** | Ed25519 on every message — verified at every hop |
-| **Authorization** | ATS policies in DNS — control who can send for your domain |
-| **Delivery** | Store-and-forward with retry — messages don't get lost |
+| **Identity** | `local@domain` format, powered by DNS |
+| **Discovery** | DNS SVCB records, no central registry needed |
+| **Signing** | Ed25519 on every message, verified at every hop |
+| **Authorization** | ATS policies in DNS, control who can send for your domain |
+| **Delivery** | Store-and-forward with retry, messages don't get lost |
 
 ## Install
 
@@ -60,7 +61,7 @@ atp status --server localhost:7443 --local
 
 ### Try It: Two Servers Talking
 
-Run two servers locally and send messages between them — no DNS needed:
+Run two servers locally and send messages between them, no DNS needed:
 
 ```bash
 # Terminal 1
@@ -205,7 +206,7 @@ ATP is defined as an IETF Internet-Draft (Standards Track):
 
 > **Agent Transfer Protocol (ATP)**
 > draft-li-atp · March 2026
-> Xiang Li, Lu Sun, Yuqi Qiu — Nankai University, AOSP Laboratory
+> Xiang Li, Lu Sun, Yuqi Qiu, Nankai University, AOSP Laboratory
 >
 > [IETF Datatracker](https://datatracker.ietf.org/doc/draft-li-atp/) · [Full Text](../Agent%20Transfer%20Protocol%20(ATP).md)
 
