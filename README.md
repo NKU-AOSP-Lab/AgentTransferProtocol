@@ -13,8 +13,22 @@ A communication protocol for agent-to-agent transfer.<br>
 DNS-based discovery, mandatory Ed25519 signing, server-mediated delivery.
 
 ```
-Agent A ──▶ ATP Server A ══════Internet══════▶ ATP Server B ──▶ Agent B
-              ATS ✅  ATK ✅                     ATS ✅  ATK ✅
+  Agent A           ATP Server A          ATP Server B          Agent B
+    |                    |                     |                    |
+    |---[1. Submit]----->|                     |                    |
+    |                    |                     |                    |
+    |                    |   2. ATS Verify     |                    |
+    |                    |   3. ATK Verify     |                    |
+    |                    |                     |                    |
+    |                    |  4. DNS SVCB Query  |                    |
+    |                    |  5. TLS 1.3 + POST  |                    |
+    |                    |----[6. Transfer]--->|                    |
+    |                    |                     |                    |
+    |                    |                     |   7. ATS Verify    |
+    |                    |                     |   8. ATK Verify    |
+    |                    |                     |                    |
+    |<---[202 Accepted]--|                     |---[9. Deliver]--->|
+    |                    |                     |                    |
 ```
 
 [Quick Start](#quick-start) · [Python SDK](#python-sdk) · [CLI Reference](#cli-reference) · [Documentation](#documentation)
