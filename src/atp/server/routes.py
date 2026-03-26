@@ -57,66 +57,75 @@ async def handle_message(request: Request) -> JSONResponse:
                 content={"error": "Invalid sender ID", "details": str(exc)},
             )
 
-        # 4b. Credential check for local agent submissions
+        # 4b. Determine: local agent submission vs remote server transfer
         is_local_submission = (sender_domain == server.config.domain)
 
-        if is_local_submission and hasattr(server, 'agent_store') and server.agent_store is not None:
-            auth_header = request.headers.get("authorization", "")
-            if not auth_header.startswith("Basic "):
-                return JSONResponse(
-                    {"error": "Credential required for local agent"},
-                    status_code=401,
-                )
-            try:
-                decoded = base64.b64decode(auth_header[6:]).decode()
-                auth_agent_id, auth_password = decoded.split(":", 1)
-            except Exception:
-                return JSONResponse(
-                    {"error": "Invalid Authorization header"},
-                    status_code=401,
-                )
+        if is_local_submission:
+            # ── Local Agent → Server A: Credential Verify only ──
+            # Server A is the agent's own server. Verify identity via
+            # username+password (Basic Auth over TLS). No ATS+ATK needed.
+            if hasattr(server, 'agent_store') and server.agent_store is not None:
+                auth_header = request.headers.get("authorization", "")
+                if not auth_header.startswith("Basic "):
+                    return JSONResponse(
+                        {"error": "Credential required for local agent"},
+                        status_code=401,
+                    )
+                try:
+                    decoded = base64.b64decode(auth_header[6:]).decode()
+                    auth_agent_id, auth_password = decoded.split(":", 1)
+                except Exception:
+                    return JSONResponse(
+                        {"error": "Invalid Authorization header"},
+                        status_code=401,
+                    )
 
-            if not server.agent_store.verify(auth_agent_id, auth_password):
-                logger.warning(f"Credential verification failed for {auth_agent_id}")
+                if not server.agent_store.verify(auth_agent_id, auth_password):
+                    logger.warning(f"Credential verification failed for {auth_agent_id}")
+                    if server.metrics:
+                        server.metrics.record_credential_failed()
+                    return JSONResponse(
+                        {"error": "Credential verification failed"},
+                        status_code=401,
+                    )
+
                 if server.metrics:
-                    server.metrics.record_credential_failed()
+                    server.metrics.record_credential_passed()
+
+                logger.info(f"Credential verified for {auth_agent_id}")
+
+        else:
+            # ── Remote Server → Server B: ATS + ATK Verify ──
+            # Message transferred from another ATP Server. Verify sender
+            # authorization (ATS) and message integrity (ATK) via DNS.
+
+            # ATS verify
+            ats_result = await server.ats_verifier.verify(sender_domain, source_ip)
+            server.metrics.record_ats(ats_result.status)
+            if ats_result.status == "FAIL":
                 return JSONResponse(
-                    {"error": "Credential verification failed"},
-                    status_code=401,
+                    status_code=403,
+                    content={
+                        "error": "ATS validation failed",
+                        "error_code": ats_result.error_code,
+                        "matched_directive": ats_result.matched_directive,
+                    },
                 )
 
-            if server.metrics:
-                server.metrics.record_credential_passed()
+            # ATK verify
+            atk_result = await server.atk_verifier.verify(message)
+            server.metrics.record_atk(atk_result.passed)
+            if not atk_result.passed:
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "error": "ATK verification failed",
+                        "error_code": atk_result.error_code,
+                        "error_message": atk_result.error_message,
+                    },
+                )
 
-            logger.info(f"Credential verified for {auth_agent_id}")
-
-        # 5. ATS verify
-        ats_result = await server.ats_verifier.verify(sender_domain, source_ip)
-        server.metrics.record_ats(ats_result.status)
-        if ats_result.status == "FAIL":
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "error": "ATS validation failed",
-                    "error_code": ats_result.error_code,
-                    "matched_directive": ats_result.matched_directive,
-                },
-            )
-
-        # 6. ATK verify
-        atk_result = await server.atk_verifier.verify(message)
-        server.metrics.record_atk(atk_result.passed)
-        if not atk_result.passed:
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "error": "ATK verification failed",
-                    "error_code": atk_result.error_code,
-                    "error_message": atk_result.error_message,
-                },
-            )
-
-        # 7. Replay check
+        # 5. Replay check (both local and remote)
         if not server.replay_guard.check(message.nonce, message.timestamp):
             server.metrics.record_replay_blocked()
             return JSONResponse(

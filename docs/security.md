@@ -1,22 +1,31 @@
 # Security Model
 
-ATP provides three layers of security, each addressing a different threat:
+ATP provides four layers of security, each addressing a different threat:
 
 ```
 ┌──────────────────────────────────────────────────────┐
 │  ATK (Agent Transfer Key)                             │
 │  "Is this message authentic and untampered?"          │
-│  → Ed25519 digital signatures on every message        │
+│  → Ed25519 digital signatures (verified at Server B)  │
 ├──────────────────────────────────────────────────────┤
 │  ATS (Agent Transfer Sender Policy)                   │
 │  "Is this server authorized to send for this domain?" │
-│  → DNS-published IP/domain authorization              │
+│  → DNS-published authorization (verified at Server B) │
+├──────────────────────────────────────────────────────┤
+│  Credential                                           │
+│  "Is this agent who they claim to be?"                │
+│  → Username + password (verified at Server A)         │
 ├──────────────────────────────────────────────────────┤
 │  TLS 1.3                                              │
 │  "Is the connection encrypted and authenticated?"     │
 │  → Mandatory encrypted transport                      │
 └──────────────────────────────────────────────────────┘
 ```
+
+The security model is **asymmetric by design**:
+
+- **Server A** (agent's own server): verifies **Credential** (username + password via Basic Auth over TLS)
+- **Server B** (remote receiving server): verifies **ATS + ATK** (DNS-based sender authorization + message signature)
 
 ## ATS — Agent Transfer Sender Policy
 

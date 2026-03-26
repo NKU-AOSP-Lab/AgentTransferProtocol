@@ -52,12 +52,21 @@ Directories are created automatically by `atp keys generate` or `atp server star
 | `--key` | — | TLS private key path |
 | `--log-level` | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 
+### `atp agent`
+
+| Subcommand | Description |
+|-----------|-------------|
+| `register <agent_id>` | Register an agent with password (prompted interactively) |
+| `list` | List all registered agents |
+| `remove <agent_id>` | Remove a registered agent |
+
 ### `atp send`
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `<to>` | (required) | Recipient agent ID (`agent@domain`) |
 | `--from` | config `agent_id` | Sender agent ID |
+| `--password`, `-P` | — | Agent password for Credential authentication |
 | `--body`, `-b` | — | Message body text |
 | `--subject`, `-s` | — | Message subject |
 | `--payload`, `-p` | — | Path to JSON file with custom payload |
@@ -84,6 +93,23 @@ Directories are created automatically by `atp keys generate` or `atp server star
 | `show --selector <name> [--public]` | Display key information |
 | `list` | List all key pairs |
 | `rotate --old-selector <old> --new-selector <new>` | Generate new key, keep old |
+
+### `atp status`
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--server` | `localhost:7443` | Server URL (`host:port`) |
+| `--local` | `false` | Disable TLS verification |
+| `--output` | `text` | Output format (`json` or `text`) |
+
+### `atp inspect`
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `<nonce>` | (required) | Message nonce to inspect |
+| `--server` | `localhost:7443` | Server URL (`host:port`) |
+| `--local` | `false` | Disable TLS verification |
+| `--output` | `text` | Output format (`json` or `text`) |
 
 ### `atp dns`
 

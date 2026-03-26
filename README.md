@@ -51,7 +51,7 @@ Agents need a standard way to communicate across the Internet: securely, without
 ## Install
 
 ```bash
-pip install atp
+pip install agent-transfer-protocol
 ```
 
 > Requires Python 3.11+
@@ -59,33 +59,44 @@ pip install atp
 ## Quick Start
 
 ```bash
-# 1. Generate an Ed25519 key pair
-atp keys generate
-
-# 2. Start a server
+# 1. Start a server (keys are auto-generated if not present)
 atp server start --domain example.com --port 7443 --local
 
+# 2. Register an agent on the server
+atp agent register mybot@example.com
+
 # 3. Send a message (from another terminal)
-atp send agent@remote.org --from mybot@example.com --body "Hello!" --local
+atp send agent@remote.org \
+  --from mybot@example.com \
+  --password <your-password> \
+  --server localhost:7443 --local \
+  --body "Hello!"
 
 # 4. Check server status
 atp status --server localhost:7443 --local
 ```
+
+> Server-side Ed25519 keys are managed automatically. Use `atp keys generate` only if you need manual control.
 
 ### Try It: Two Servers Talking
 
 Run two servers locally and send messages between them, no DNS needed:
 
 ```bash
-# Terminal 1
+# Terminal 1: Start Server A
 atp server start --domain alice.local --port 7443 --local --peers peers.toml
 
-# Terminal 2
+# Terminal 2: Start Server B
 atp server start --domain bob.local --port 7444 --local --peers peers.toml
+
+# Register agents
+atp agent register agent@alice.local
+atp agent register agent@bob.local
 
 # Terminal 3: Alice sends to Bob
 atp send agent@bob.local \
   --from agent@alice.local \
+  --password <password> \
   --server localhost:7443 \
   --local \
   --body "Hello Bob!"
@@ -118,6 +129,7 @@ from atp.client.client import ATPClient
 async def main():
     client = ATPClient(
         agent_id="mybot@example.com",
+        password="your-password",
         server_url="localhost:7443",
         local_mode=True,
     )
@@ -142,15 +154,23 @@ asyncio.run(main())
 
 | Command | Description |
 |---------|-------------|
-| `atp server start` | Start ATP server |
+| `atp server start` | Start ATP server (auto-generates keys if needed) |
 | `atp send <to>` | Send a message |
 | `atp recv` | Receive messages |
 
-### Key Management
+### Agent Management
 
 | Command | Description |
 |---------|-------------|
-| `atp keys generate` | Generate Ed25519 key pair |
+| `atp agent register <id>` | Register an agent with credentials |
+| `atp agent list` | List registered agents |
+| `atp agent remove <id>` | Remove an agent |
+
+### Key Management (Server)
+
+| Command | Description |
+|---------|-------------|
+| `atp keys generate` | Generate Ed25519 key pair (usually auto-managed) |
 | `atp keys show` | Show key info |
 | `atp keys list` | List all keys |
 | `atp keys rotate` | Rotate to a new key |
@@ -197,10 +217,11 @@ ATP provides three layers of security, inspired by email's battle-tested approac
 | Layer | ATP | Email Equivalent | Purpose |
 |-------|-----|-----------------|---------|
 | Transport | TLS 1.3 | STARTTLS | Encrypted connections |
+| Authentication | Credential | SMTP AUTH | Agent identity (username + password) |
 | Authorization | ATS | SPF | Who can send for a domain |
 | Integrity | ATK (Ed25519) | DKIM | Message signing & verification |
 
-Every message is cryptographically signed. Every hop verifies independently.
+Agents authenticate to their server with credentials. Messages are cryptographically signed. Remote servers verify independently via ATS+ATK.
 
 ## Documentation
 
@@ -226,10 +247,10 @@ ATP is defined as an IETF Internet-Draft (Standards Track):
 ## Contributing
 
 ```bash
-git clone https://github.com/AospLab/atp.git
+git clone https://github.com/NKU-AOSP-Lab/AgentTransferProtocol.git
 cd atp
 pip install -e ".[dev]"
-python -m pytest tests/ -v    # 195 tests
+python -m pytest tests/ -v    # 212 tests
 ```
 
 See [Architecture](docs/architecture.md) for module design and development guide.

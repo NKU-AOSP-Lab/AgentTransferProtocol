@@ -55,6 +55,7 @@ src/atp/
 │   ├── config.py           # RuntimeServerConfig
 │   ├── app.py              # ATPServer — wires everything together
 │   ├── routes.py           # HTTP route handlers
+│   ├── metrics.py          # ServerMetrics — message and security counters
 │   ├── delivery.py         # Background delivery manager with retry
 │   └── queue.py            # Message queue wrapper
 │

@@ -261,6 +261,33 @@ server = ATPServer(config)
 server.run()  # Blocking — starts uvicorn
 ```
 
+## Observability API
+
+Query server metrics and message status programmatically:
+
+```python
+import httpx, asyncio
+
+async def check_server():
+    async with httpx.AsyncClient(verify=False) as client:
+        # Server stats
+        resp = await client.get("https://localhost:7443/.well-known/atp/v1/stats")
+        stats = resp.json()
+        print(f"Messages received: {stats['messages']['received']}")
+        print(f"ATS failures: {stats['security']['ats_fail']}")
+        print(f"Queue backlog: {stats['queue']['queued']}")
+
+        # Inspect specific message
+        resp = await client.get(
+            "https://localhost:7443/.well-known/atp/v1/inspect",
+            params={"nonce": "msg-a1b2c3d4e5f6"}
+        )
+        msg = resp.json()
+        print(f"Status: {msg['status']}, Retries: {msg['retry_count']}")
+
+asyncio.run(check_server())
+```
+
 ## Error Handling
 
 All ATP errors inherit from `ATPError`:
