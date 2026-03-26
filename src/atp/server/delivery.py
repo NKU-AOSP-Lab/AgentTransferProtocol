@@ -1,0 +1,111 @@
+"""Delivery manager — background loop that transfers queued messages to remote servers."""
+
+import asyncio
+import logging
+import time
+
+from atp.core.message import ATPMessage
+from atp.core.identity import AgentID
+from atp.core.signature import Signer
+from atp.discovery.dns import BaseDNSResolver
+from atp.storage.messages import MessageStore, MessageStatus
+
+logger = logging.getLogger("atp.server.delivery")
+
+
+class DeliveryManager:
+    def __init__(
+        self,
+        message_store: MessageStore,
+        dns_resolver: BaseDNSResolver,
+        transport,
+        signer: Signer,
+        server_domain: str,
+        max_retries: int = 6,
+    ):
+        self._store = message_store
+        self._resolver = dns_resolver
+        self._transport = transport  # HTTPTransport (from client/transport.py)
+        self._signer = signer
+        self._domain = server_domain
+        self._max_retries = max_retries
+        self._task: asyncio.Task | None = None
+        self._running = False
+
+    async def start(self) -> None:
+        self._running = True
+        self._task = asyncio.create_task(self._delivery_loop())
+
+    async def stop(self) -> None:
+        self._running = False
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+
+    async def _delivery_loop(self) -> None:
+        """Loop: get pending messages, attempt transfer, handle results."""
+        while self._running:
+            try:
+                pending = self._store.get_pending_deliveries(limit=20)
+                for stored in pending:
+                    await self._deliver_one(stored)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Delivery loop error: {e}")
+            await asyncio.sleep(5)
+
+    async def _deliver_one(self, stored) -> None:
+        """Deliver one message. On success mark DELIVERED. On failure mark retry or bounce."""
+        message = ATPMessage.from_json(stored.message_json)
+        self._store.update_status(stored.nonce, MessageStatus.DELIVERING)
+
+        success = await self.transfer(message)
+        if success:
+            self._store.update_status(stored.nonce, MessageStatus.DELIVERED)
+            logger.info(f"Delivered {stored.nonce} to {stored.to_id}")
+        else:
+            if stored.retry_count >= self._max_retries:
+                self._store.update_status(stored.nonce, MessageStatus.BOUNCED, error="Max retries exceeded")
+                await self._send_bounce(message, "Max retries exceeded")
+                logger.warning(f"Bounced {stored.nonce}: max retries exceeded")
+            else:
+                delay = self._next_retry_delay(stored.retry_count)
+                self._store.mark_retry(stored.nonce, int(time.time()) + delay)
+                logger.info(f"Retry {stored.nonce} in {delay}s (attempt {stored.retry_count + 1})")
+
+    async def transfer(self, message: ATPMessage) -> bool:
+        """Transfer message to remote server. Return True on success."""
+        try:
+            target = AgentID.parse(message.to_id)
+            server_info = await self._resolver.query_svcb(target.domain)
+            if not server_info:
+                logger.error(f"Cannot discover server for {target.domain}")
+                return False
+            result = await self._transport.post_message(server_info, message)
+            return result.success
+        except Exception as e:
+            logger.error(f"Transfer failed for {message.nonce}: {e}")
+            return False
+
+    def _next_retry_delay(self, retry_count: int) -> int:
+        """Exponential backoff: 60, 300, 1800, 7200, 28800, 86400"""
+        delays = [60, 300, 1800, 7200, 28800, 86400]
+        return delays[min(retry_count, len(delays) - 1)]
+
+    async def _send_bounce(self, original: ATPMessage, error: str) -> None:
+        """Generate bounce notification and enqueue."""
+        bounce = ATPMessage.create(
+            from_id=f"postmaster@{self._domain}",
+            to_id=original.from_id,
+            payload={
+                "subject": f"Delivery Failure: {original.nonce}",
+                "body": f"Message to {original.to_id} could not be delivered. Error: {error}",
+                "original_nonce": original.nonce,
+            },
+        )
+        self._signer.sign(bounce)
+        self._store.enqueue(bounce, MessageStatus.QUEUED)

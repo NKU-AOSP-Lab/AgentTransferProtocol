@@ -1,0 +1,441 @@
+"""Tests for ATP server modules: config, queue, routes, delivery."""
+
+import json
+import sqlite3
+import time
+
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+from starlette.testclient import TestClient
+from starlette.applications import Starlette
+
+from atp.server.config import RuntimeServerConfig
+from atp.server.routes import get_routes
+from atp.server.queue import MessageQueue
+from atp.server.delivery import DeliveryManager
+from atp.core.message import ATPMessage
+from atp.core.signature import Signer, VerifyResult
+from atp.security.ats import ATSResult
+from atp.security.replay import ReplayGuard
+from atp.storage.config import ATPConfig, ServerConfig
+from atp.storage.messages import MessageStore, MessageStatus
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+
+def _make_thread_safe_store(db_path) -> MessageStore:
+    """Create a MessageStore with check_same_thread=False for TestClient compatibility.
+
+    Starlette's TestClient runs the ASGI app in a separate thread, so the
+    default SQLite same-thread check would fail.
+    """
+    store = MessageStore.__new__(MessageStore)
+    store._db_path = db_path
+    store._conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    store._conn.row_factory = sqlite3.Row
+    store.init_db()
+    return store
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def private_key():
+    return Ed25519PrivateKey.generate()
+
+
+@pytest.fixture
+def signer(private_key):
+    return Signer(private_key, "default", "sender.com")
+
+
+def _make_signed_message(signer, from_id="agent@sender.com", to_id="bot@test.local", payload=None):
+    """Helper: create and sign a message."""
+    if payload is None:
+        payload = {"body": "hello"}
+    msg = ATPMessage.create(from_id, to_id, payload)
+    signer.sign(msg)
+    return msg
+
+
+@pytest.fixture
+def mock_server(tmp_path):
+    """Create a mock server object with all dependencies mocked."""
+    server = MagicMock()
+    server.config = RuntimeServerConfig(domain="test.local", port=7443, max_message_size=1_048_576)
+
+    # ATS: always PASS
+    server.ats_verifier = AsyncMock()
+    server.ats_verifier.verify = AsyncMock(return_value=ATSResult(status="PASS"))
+
+    # ATK: always PASS
+    server.atk_verifier = AsyncMock()
+    server.atk_verifier.verify = AsyncMock(return_value=VerifyResult(passed=True))
+
+    # Replay: always fresh
+    server.replay_guard = ReplayGuard()
+
+    # Queue with real MessageStore (thread-safe for TestClient)
+    store = _make_thread_safe_store(tmp_path / "test.db")
+    server.queue = MessageQueue(store)
+
+    return server
+
+
+@pytest.fixture
+def client(mock_server):
+    app = Starlette(routes=get_routes())
+    app.state.server = mock_server
+    return TestClient(app)
+
+
+# ---------------------------------------------------------------------------
+# Config tests
+# ---------------------------------------------------------------------------
+
+class TestRuntimeServerConfig:
+    def test_defaults(self):
+        cfg = RuntimeServerConfig(domain="example.com")
+        assert cfg.domain == "example.com"
+        assert cfg.port == 7443
+        assert cfg.host == "0.0.0.0"
+        assert cfg.local_mode is False
+        assert cfg.max_message_size == 1_048_576
+
+    def test_from_cli_and_config_defaults(self):
+        atp_config = ATPConfig(
+            server=ServerConfig(domain="file.local", port=8443),
+            local_mode=True,
+            peers_file="peers.toml",
+        )
+        cfg = RuntimeServerConfig.from_cli_and_config({}, atp_config)
+        assert cfg.domain == "file.local"
+        assert cfg.port == 8443
+        assert cfg.local_mode is True
+        assert cfg.peers_file == "peers.toml"
+
+    def test_cli_overrides_config(self):
+        atp_config = ATPConfig(
+            server=ServerConfig(domain="file.local", port=8443),
+        )
+        cli_args = {"domain": "cli.local", "port": 9999, "local": False, "log_level": "DEBUG"}
+        cfg = RuntimeServerConfig.from_cli_and_config(cli_args, atp_config)
+        assert cfg.domain == "cli.local"
+        assert cfg.port == 9999
+        assert cfg.local_mode is False
+        assert cfg.log_level == "DEBUG"
+
+    def test_cli_none_values_do_not_override(self):
+        atp_config = ATPConfig(
+            server=ServerConfig(domain="file.local", port=8443),
+        )
+        cli_args = {"domain": None, "port": None}
+        cfg = RuntimeServerConfig.from_cli_and_config(cli_args, atp_config)
+        assert cfg.domain == "file.local"
+        assert cfg.port == 8443
+
+
+# ---------------------------------------------------------------------------
+# Queue tests
+# ---------------------------------------------------------------------------
+
+class TestMessageQueue:
+    @pytest.mark.asyncio
+    async def test_enqueue_and_get_for_agent(self, tmp_path):
+        store = MessageStore(tmp_path / "q.db")
+        store.init_db()
+        queue = MessageQueue(store)
+
+        msg = ATPMessage.create("a@sender.com", "b@recv.com", {"body": "test"})
+        msg_id = await queue.enqueue(msg, MessageStatus.DELIVERED)
+        assert msg_id > 0
+
+        results = await queue.get_for_agent("b@recv.com")
+        assert len(results) == 1
+        assert results[0].nonce == msg.nonce
+
+    @pytest.mark.asyncio
+    async def test_get_pending(self, tmp_path):
+        store = MessageStore(tmp_path / "q2.db")
+        store.init_db()
+        queue = MessageQueue(store)
+
+        msg = ATPMessage.create("a@s.com", "b@r.com", {"x": 1})
+        await queue.enqueue(msg, MessageStatus.QUEUED)
+
+        pending = await queue.get_pending()
+        assert len(pending) == 1
+
+
+# ---------------------------------------------------------------------------
+# Route tests
+# ---------------------------------------------------------------------------
+
+class TestHandleMessage:
+    def test_valid_message_accepted(self, client, signer):
+        msg = _make_signed_message(signer)
+        resp = client.post("/.well-known/atp/v1/message", content=msg.to_json())
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["status"] == "accepted"
+        assert "nonce" in data
+
+    def test_invalid_json_returns_400(self, client):
+        resp = client.post("/.well-known/atp/v1/message", content="not json")
+        assert resp.status_code == 400
+
+    def test_missing_fields_returns_400(self, client):
+        resp = client.post("/.well-known/atp/v1/message", content='{"from": "a@b.com"}')
+        assert resp.status_code == 400
+
+    def test_ats_fail_returns_403(self, client, mock_server, signer):
+        mock_server.ats_verifier.verify = AsyncMock(
+            return_value=ATSResult(status="FAIL", error_code="550 5.7.26")
+        )
+        msg = _make_signed_message(signer)
+        resp = client.post("/.well-known/atp/v1/message", content=msg.to_json())
+        assert resp.status_code == 403
+        assert "ATS" in resp.json()["error"]
+
+    def test_atk_fail_returns_403(self, client, mock_server, signer):
+        mock_server.atk_verifier.verify = AsyncMock(
+            return_value=VerifyResult(passed=False, error_code="550 5.7.28", error_message="bad sig")
+        )
+        msg = _make_signed_message(signer)
+        resp = client.post("/.well-known/atp/v1/message", content=msg.to_json())
+        assert resp.status_code == 403
+        assert "ATK" in resp.json()["error"]
+
+    def test_replay_returns_400(self, client, signer):
+        msg = _make_signed_message(signer)
+        body = msg.to_json()
+        resp1 = client.post("/.well-known/atp/v1/message", content=body)
+        assert resp1.status_code == 202
+        # Same nonce again → replay
+        resp2 = client.post("/.well-known/atp/v1/message", content=body)
+        assert resp2.status_code == 400
+        assert "Replay" in resp2.json()["error"]
+
+    def test_local_delivery_marked_delivered(self, client, mock_server, signer):
+        # to_id domain matches server domain "test.local"
+        msg = _make_signed_message(signer, to_id="bot@test.local")
+        resp = client.post("/.well-known/atp/v1/message", content=msg.to_json())
+        assert resp.status_code == 202
+
+        # Verify it was stored as DELIVERED
+        stored = mock_server.queue._store.get_by_nonce(msg.nonce)
+        assert stored is not None
+        assert stored.status == MessageStatus.DELIVERED
+
+    def test_remote_delivery_marked_queued(self, client, mock_server, signer):
+        # to_id domain does NOT match server domain
+        msg = _make_signed_message(signer, to_id="bot@remote.com")
+        resp = client.post("/.well-known/atp/v1/message", content=msg.to_json())
+        assert resp.status_code == 202
+
+        stored = mock_server.queue._store.get_by_nonce(msg.nonce)
+        assert stored is not None
+        assert stored.status == MessageStatus.QUEUED
+
+    def test_message_too_large_returns_400(self, client, mock_server, signer):
+        mock_server.config.max_message_size = 10  # very small
+        msg = _make_signed_message(signer)
+        resp = client.post("/.well-known/atp/v1/message", content=msg.to_json())
+        assert resp.status_code == 400
+        assert "too large" in resp.json()["error"].lower()
+
+
+class TestHandleRecv:
+    def test_get_messages_for_agent(self, client, mock_server, signer):
+        # Enqueue a delivered message first
+        msg = _make_signed_message(signer, to_id="bot@test.local")
+        mock_server.queue._store.enqueue(msg, MessageStatus.DELIVERED)
+
+        resp = client.get("/.well-known/atp/v1/messages?agent_id=bot@test.local")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 1
+        assert data["messages"][0]["nonce"] == msg.nonce
+
+    def test_missing_agent_id_returns_400(self, client):
+        resp = client.get("/.well-known/atp/v1/messages")
+        assert resp.status_code == 400
+
+    def test_after_id_parameter(self, client, mock_server, signer):
+        # Enqueue two messages
+        msg1 = _make_signed_message(signer, to_id="bot@test.local")
+        msg2 = _make_signed_message(signer, to_id="bot@test.local")
+        id1 = mock_server.queue._store.enqueue(msg1, MessageStatus.DELIVERED)
+        mock_server.queue._store.enqueue(msg2, MessageStatus.DELIVERED)
+
+        resp = client.get(f"/.well-known/atp/v1/messages?agent_id=bot@test.local&after_id={id1}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 1
+        assert data["messages"][0]["nonce"] == msg2.nonce
+
+
+class TestCapabilities:
+    def test_capabilities_response(self, client):
+        resp = client.get("/.well-known/atp/v1/capabilities")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["version"] == "1.0"
+        assert "message" in data["capabilities"]
+        assert "atp/1" in data["protocols"]
+        assert "max_payload_size" in data
+
+
+class TestHealth:
+    def test_health_response(self, client):
+        resp = client.get("/.well-known/atp/v1/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "healthy"
+        assert data["domain"] == "test.local"
+        assert "version" in data
+
+
+# ---------------------------------------------------------------------------
+# Delivery manager tests
+# ---------------------------------------------------------------------------
+
+class TestDeliveryManager:
+    def test_next_retry_delay(self):
+        dm = DeliveryManager(
+            message_store=MagicMock(),
+            dns_resolver=MagicMock(),
+            transport=MagicMock(),
+            signer=MagicMock(),
+            server_domain="test.local",
+        )
+        assert dm._next_retry_delay(0) == 60
+        assert dm._next_retry_delay(1) == 300
+        assert dm._next_retry_delay(2) == 1800
+        assert dm._next_retry_delay(3) == 7200
+        assert dm._next_retry_delay(4) == 28800
+        assert dm._next_retry_delay(5) == 86400
+        assert dm._next_retry_delay(99) == 86400  # clamp
+
+    @pytest.mark.asyncio
+    async def test_transfer_success(self):
+        mock_resolver = AsyncMock()
+        mock_resolver.query_svcb = AsyncMock(return_value=MagicMock(host="remote.com", port=7443))
+
+        mock_transport = AsyncMock()
+        mock_transport.post_message = AsyncMock(return_value=MagicMock(success=True))
+
+        dm = DeliveryManager(
+            message_store=MagicMock(),
+            dns_resolver=mock_resolver,
+            transport=mock_transport,
+            signer=MagicMock(),
+            server_domain="test.local",
+        )
+
+        msg = ATPMessage.create("a@test.local", "b@remote.com", {"x": 1})
+        result = await dm.transfer(msg)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_transfer_no_server_info(self):
+        mock_resolver = AsyncMock()
+        mock_resolver.query_svcb = AsyncMock(return_value=None)
+
+        dm = DeliveryManager(
+            message_store=MagicMock(),
+            dns_resolver=mock_resolver,
+            transport=MagicMock(),
+            signer=MagicMock(),
+            server_domain="test.local",
+        )
+
+        msg = ATPMessage.create("a@test.local", "b@unknown.com", {"x": 1})
+        result = await dm.transfer(msg)
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_deliver_one_success(self, tmp_path):
+        store = MessageStore(tmp_path / "del.db")
+        store.init_db()
+
+        msg = ATPMessage.create("a@test.local", "b@remote.com", {"x": 1})
+        store.enqueue(msg, MessageStatus.QUEUED)
+        stored = store.get_by_nonce(msg.nonce)
+
+        mock_resolver = AsyncMock()
+        mock_resolver.query_svcb = AsyncMock(return_value=MagicMock())
+        mock_transport = AsyncMock()
+        mock_transport.post_message = AsyncMock(return_value=MagicMock(success=True))
+
+        dm = DeliveryManager(
+            message_store=store,
+            dns_resolver=mock_resolver,
+            transport=mock_transport,
+            signer=MagicMock(),
+            server_domain="test.local",
+        )
+
+        await dm._deliver_one(stored)
+        updated = store.get_by_nonce(msg.nonce)
+        assert updated.status == MessageStatus.DELIVERED
+
+    @pytest.mark.asyncio
+    async def test_deliver_one_failure_retries(self, tmp_path):
+        store = MessageStore(tmp_path / "del2.db")
+        store.init_db()
+
+        msg = ATPMessage.create("a@test.local", "b@remote.com", {"x": 1})
+        store.enqueue(msg, MessageStatus.QUEUED)
+        stored = store.get_by_nonce(msg.nonce)
+
+        mock_resolver = AsyncMock()
+        mock_resolver.query_svcb = AsyncMock(return_value=None)
+
+        dm = DeliveryManager(
+            message_store=store,
+            dns_resolver=mock_resolver,
+            transport=MagicMock(),
+            signer=MagicMock(),
+            server_domain="test.local",
+            max_retries=6,
+        )
+
+        await dm._deliver_one(stored)
+        updated = store.get_by_nonce(msg.nonce)
+        assert updated.status == MessageStatus.FAILED  # marked for retry
+        assert updated.retry_count == 1
+
+    @pytest.mark.asyncio
+    async def test_deliver_one_max_retries_bounces(self, tmp_path, private_key):
+        store = MessageStore(tmp_path / "del3.db")
+        store.init_db()
+
+        msg = ATPMessage.create("a@sender.com", "b@remote.com", {"x": 1})
+        store.enqueue(msg, MessageStatus.QUEUED)
+
+        # Simulate max retries reached by updating retry_count
+        for _ in range(6):
+            store.mark_retry(msg.nonce, int(time.time()) - 1)
+
+        stored = store.get_by_nonce(msg.nonce)
+        assert stored.retry_count >= 6
+
+        mock_resolver = AsyncMock()
+        mock_resolver.query_svcb = AsyncMock(return_value=None)
+
+        real_signer = Signer(private_key, "default", "test.local")
+
+        dm = DeliveryManager(
+            message_store=store,
+            dns_resolver=mock_resolver,
+            transport=MagicMock(),
+            signer=real_signer,
+            server_domain="test.local",
+            max_retries=6,
+        )
+
+        await dm._deliver_one(stored)
+        updated = store.get_by_nonce(msg.nonce)
+        assert updated.status == MessageStatus.BOUNCED
