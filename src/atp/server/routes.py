@@ -1,5 +1,6 @@
 """HTTP route handlers for the ATP server."""
 
+import base64
 import json
 import sqlite3
 import time
@@ -48,12 +49,46 @@ async def handle_message(request: Request) -> JSONResponse:
 
         # 4. Sender domain
         try:
-            sender_domain = AgentID.parse(message.from_id).domain
+            sender = AgentID.parse(message.from_id)
+            sender_domain = sender.domain
         except MessageFormatError as exc:
             return JSONResponse(
                 status_code=400,
                 content={"error": "Invalid sender ID", "details": str(exc)},
             )
+
+        # 4b. Credential check for local agent submissions
+        is_local_submission = (sender_domain == server.config.domain)
+
+        if is_local_submission and hasattr(server, 'agent_store') and server.agent_store is not None:
+            auth_header = request.headers.get("authorization", "")
+            if not auth_header.startswith("Basic "):
+                return JSONResponse(
+                    {"error": "Credential required for local agent"},
+                    status_code=401,
+                )
+            try:
+                decoded = base64.b64decode(auth_header[6:]).decode()
+                auth_agent_id, auth_password = decoded.split(":", 1)
+            except Exception:
+                return JSONResponse(
+                    {"error": "Invalid Authorization header"},
+                    status_code=401,
+                )
+
+            if not server.agent_store.verify(auth_agent_id, auth_password):
+                logger.warning(f"Credential verification failed for {auth_agent_id}")
+                if server.metrics:
+                    server.metrics.record_credential_failed()
+                return JSONResponse(
+                    {"error": "Credential verification failed"},
+                    status_code=401,
+                )
+
+            if server.metrics:
+                server.metrics.record_credential_passed()
+
+            logger.info(f"Credential verified for {auth_agent_id}")
 
         # 5. ATS verify
         ats_result = await server.ats_verifier.verify(sender_domain, source_ip)

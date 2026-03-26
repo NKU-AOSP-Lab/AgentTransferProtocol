@@ -70,6 +70,47 @@ def test_inspect_help(runner):
     assert result.exit_code == 0
 
 
+def test_agent_help(runner):
+    result = runner.invoke(cli, ["agent", "--help"])
+    assert result.exit_code == 0
+    assert "agent" in result.output.lower()
+
+
+def test_agent_register(runner, tmp_path, monkeypatch):
+    """Test agent registration via CLI."""
+    import pathlib
+
+    monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
+    result = runner.invoke(cli, ["agent", "register", "alice@example.com", "-p", "secret123"], input="secret123\n")
+    assert result.exit_code == 0
+    assert "Agent registered" in result.output
+
+
+def test_agent_list(runner, tmp_path, monkeypatch):
+    """Test agent listing via CLI."""
+    import pathlib
+
+    monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
+    # First register an agent
+    runner.invoke(cli, ["agent", "register", "alice@example.com", "-p", "secret123"], input="secret123\n")
+    # Then list
+    result = runner.invoke(cli, ["agent", "list"])
+    assert result.exit_code == 0
+    assert "alice@example.com" in result.output
+
+
+def test_agent_remove(runner, tmp_path, monkeypatch):
+    """Test agent removal via CLI."""
+    import pathlib
+
+    monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
+    # Register then remove
+    runner.invoke(cli, ["agent", "register", "alice@example.com", "-p", "secret123"], input="secret123\n")
+    result = runner.invoke(cli, ["agent", "remove", "alice@example.com"])
+    assert result.exit_code == 0
+    assert "Agent removed" in result.output
+
+
 def test_dns_generate(runner, tmp_path, monkeypatch):
     """Test DNS record generation."""
     import pathlib

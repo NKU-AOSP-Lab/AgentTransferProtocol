@@ -1,5 +1,6 @@
 """Tests for ATP server modules: config, queue, routes, delivery."""
 
+import base64
 import json
 import sqlite3
 import time
@@ -18,6 +19,7 @@ from atp.core.message import ATPMessage
 from atp.core.signature import Signer, VerifyResult
 from atp.security.ats import ATSResult
 from atp.security.replay import ReplayGuard
+from atp.storage.agents import AgentStore
 from atp.storage.config import ATPConfig, ServerConfig
 from atp.storage.messages import MessageStore, MessageStatus
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -35,6 +37,15 @@ def _make_thread_safe_store(db_path) -> MessageStore:
     store._conn.row_factory = sqlite3.Row
     store.init_db()
     return store
+
+
+def _make_thread_safe_agent_store(db_path) -> AgentStore:
+    """Create an AgentStore with check_same_thread=False for TestClient compatibility."""
+    agent_store = AgentStore.__new__(AgentStore)
+    agent_store._db_path = db_path
+    agent_store._conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    agent_store.init_db()
+    return agent_store
 
 
 # ---------------------------------------------------------------------------
@@ -78,8 +89,14 @@ def mock_server(tmp_path):
     server.replay_guard = ReplayGuard()
 
     # Queue with real MessageStore (thread-safe for TestClient)
-    store = _make_thread_safe_store(tmp_path / "test.db")
+    db_path = tmp_path / "test.db"
+    store = _make_thread_safe_store(db_path)
     server.queue = MessageQueue(store)
+
+    # Agent credentials store (thread-safe)
+    agent_store = _make_thread_safe_agent_store(db_path)
+    agent_store.register("agent@test.local", "testpass")
+    server.agent_store = agent_store
 
     # Metrics
     server.metrics = ServerMetrics()
@@ -248,6 +265,44 @@ class TestHandleMessage:
         resp = client.post("/.well-known/atp/v1/message", content=msg.to_json())
         assert resp.status_code == 400
         assert "too large" in resp.json()["error"].lower()
+
+    def test_local_submission_without_credential_returns_401(self, client, mock_server, signer):
+        """A local agent (from_id domain == server domain) must provide credentials."""
+        msg = _make_signed_message(signer, from_id="agent@test.local", to_id="bot@test.local")
+        resp = client.post("/.well-known/atp/v1/message", content=msg.to_json())
+        assert resp.status_code == 401
+        assert "Credential required" in resp.json()["error"]
+
+    def test_local_submission_with_wrong_credential_returns_401(self, client, mock_server, signer):
+        """A local agent with wrong password gets 401."""
+        msg = _make_signed_message(signer, from_id="agent@test.local", to_id="bot@test.local")
+        creds = base64.b64encode(b"agent@test.local:wrongpass").decode()
+        resp = client.post(
+            "/.well-known/atp/v1/message",
+            content=msg.to_json(),
+            headers={"Authorization": f"Basic {creds}"},
+        )
+        assert resp.status_code == 401
+        assert "Credential verification failed" in resp.json()["error"]
+
+    def test_local_submission_with_valid_credential_accepted(self, client, mock_server, signer):
+        """A local agent with correct credentials is accepted."""
+        msg = _make_signed_message(signer, from_id="agent@test.local", to_id="bot@test.local")
+        creds = base64.b64encode(b"agent@test.local:testpass").decode()
+        resp = client.post(
+            "/.well-known/atp/v1/message",
+            content=msg.to_json(),
+            headers={"Authorization": f"Basic {creds}"},
+        )
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "accepted"
+
+    def test_remote_transfer_without_credential_still_works(self, client, mock_server, signer):
+        """Messages from remote servers (different domain) don't need credentials."""
+        msg = _make_signed_message(signer, from_id="agent@sender.com", to_id="bot@test.local")
+        resp = client.post("/.well-known/atp/v1/message", content=msg.to_json())
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "accepted"
 
 
 class TestHandleRecv:

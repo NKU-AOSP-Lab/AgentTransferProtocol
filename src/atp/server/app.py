@@ -16,6 +16,7 @@ from atp.security.replay import ReplayGuard
 from atp.security.tls import TLSConfig
 from atp.discovery.dns import DNSResolver
 from atp.discovery.local import LocalResolver, CompositeResolver
+from atp.storage.agents import AgentStore
 from atp.storage.config import ConfigStorage
 from atp.storage.keys import KeyStorage
 from atp.storage.messages import MessageStore
@@ -35,6 +36,7 @@ class ATPServer:
         self.delivery_manager: DeliveryManager | None = None
         self.metrics: ServerMetrics | None = None
         self.signer: Signer | None = None
+        self.agent_store: AgentStore | None = None
         self._config_storage: ConfigStorage | None = None
 
     def _setup(self) -> None:
@@ -50,6 +52,10 @@ class ATPServer:
         message_store = MessageStore(db_path)
         message_store.init_db()
         self.queue = MessageQueue(message_store)
+
+        # Agent credentials store
+        self.agent_store = AgentStore(db_path)
+        self.agent_store.init_db()
 
         # DNS resolver
         dns_resolver = DNSResolver()

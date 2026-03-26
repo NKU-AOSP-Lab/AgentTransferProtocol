@@ -2,6 +2,7 @@
 
 import click
 
+from atp.cli.agent import agent_group
 from atp.cli.dns import dns_group
 from atp.cli.inspect import inspect_cmd
 from atp.cli.keys import keys_group
@@ -18,6 +19,7 @@ def cli():
     pass
 
 
+cli.add_command(agent_group, "agent")
 cli.add_command(server_group, "server")
 cli.add_command(send_cmd, "send")
 cli.add_command(recv_cmd, "recv")

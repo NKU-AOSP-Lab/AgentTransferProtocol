@@ -18,8 +18,10 @@ class ATPClient:
         config_dir: Path | None = None,
         server_url: str | None = None,
         local_mode: bool = False,
+        password: str | None = None,
     ):
         self._agent_id = agent_id
+        self._password = password
         self._config_storage = ConfigStorage(config_dir)
         self._config = self._config_storage.load()
         self._server_url = server_url
@@ -65,7 +67,8 @@ class ATPClient:
 
         # Send
         server_info = self._get_server_info()
-        result = await self._transport.post_message(server_info, msg)
+        auth = (self._agent_id, self._password) if self._password else None
+        result = await self._transport.post_message(server_info, msg, auth=auth)
 
         if result.success:
             return {"status": "accepted", "nonce": msg.nonce, "timestamp": msg.timestamp}

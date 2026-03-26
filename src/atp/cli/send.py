@@ -14,8 +14,9 @@ import click
 @click.option("--payload", "-p", type=click.Path(exists=True), help="JSON payload file")
 @click.option("--server", default=None, help="Server URL (host:port)")
 @click.option("--local", is_flag=True, help="Use local mode (no TLS verify)")
+@click.option("--password", "-P", default=None, help="Agent password for authentication")
 @click.option("--output", type=click.Choice(["json", "text"]), default="json")
-def send_cmd(to, from_id, body, subject, payload, server, local, output):
+def send_cmd(to, from_id, body, subject, payload, server, local, password, output):
     """Send an ATP message."""
     from atp.client.client import ATPClient
     from atp.storage.config import ConfigStorage
@@ -40,7 +41,7 @@ def send_cmd(to, from_id, body, subject, payload, server, local, output):
             msg_payload["subject"] = subject
 
     async def _send():
-        client = ATPClient(agent_id=from_id, server_url=server, local_mode=local)
+        client = ATPClient(agent_id=from_id, server_url=server, local_mode=local, password=password)
         try:
             result = await client.send(to, payload=msg_payload)
             return result

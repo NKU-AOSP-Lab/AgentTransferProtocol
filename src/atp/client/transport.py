@@ -1,5 +1,6 @@
 """HTTP transport layer for ATP client."""
 
+import base64
 from dataclasses import dataclass, field
 
 import httpx
@@ -27,19 +28,27 @@ class HTTPTransport:
             self._client = httpx.AsyncClient(verify=self._verify, timeout=self._timeout)
         return self._client
 
-    async def post_message(self, server_info: ServerInfo, message: ATPMessage) -> TransportResult:
+    async def post_message(
+        self, server_info: ServerInfo, message: ATPMessage, auth: tuple[str, str] | None = None
+    ) -> TransportResult:
         """POST to https://{host}:{port}/.well-known/atp/v1/message
 
         Content-Type: application/atp+json
         Body: message.to_json()
+
+        auth: optional (agent_id, password) tuple for Basic Auth.
         """
         url = f"https://{server_info.host}:{server_info.port}/.well-known/atp/v1/message"
+        headers = {"Content-Type": "application/atp+json"}
+        if auth:
+            credentials = base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode()
+            headers["Authorization"] = f"Basic {credentials}"
         try:
             client = self._get_client()
             resp = await client.post(
                 url,
                 content=message.to_json(),
-                headers={"Content-Type": "application/atp+json"},
+                headers=headers,
             )
             body = (
                 resp.json()

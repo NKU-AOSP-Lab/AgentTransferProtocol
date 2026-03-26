@@ -11,6 +11,8 @@ class SecurityMetrics:
     atk_pass: int = 0
     atk_fail: int = 0
     replay_blocked: int = 0
+    credential_pass: int = 0
+    credential_fail: int = 0
 
 
 @dataclass
@@ -57,6 +59,14 @@ class ServerMetrics:
         with self._lock:
             self.security.replay_blocked += 1
 
+    def record_credential_passed(self) -> None:
+        with self._lock:
+            self.security.credential_pass += 1
+
+    def record_credential_failed(self) -> None:
+        with self._lock:
+            self.security.credential_fail += 1
+
     def record_message_received(self) -> None:
         with self._lock:
             self.messages.received += 1
@@ -101,5 +111,7 @@ class ServerMetrics:
                     "atk_pass": self.security.atk_pass,
                     "atk_fail": self.security.atk_fail,
                     "replay_blocked": self.security.replay_blocked,
+                    "credential_pass": self.security.credential_pass,
+                    "credential_fail": self.security.credential_fail,
                 },
             }
