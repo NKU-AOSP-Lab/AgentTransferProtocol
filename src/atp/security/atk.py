@@ -106,9 +106,10 @@ class ATKVerifier:
         """Verify the ATK signature on *message*.
 
         1. Ensure the message carries a signature.
-        2. Look up the ATK TXT record via the ``key_id``.
-        3. Validate the key (not revoked / expired).
-        4. Verify the cryptographic signature.
+        2. Bind key_id domain to message sender domain.
+        3. Look up the ATK TXT record via the ``key_id``.
+        4. Validate the key (not revoked / expired).
+        5. Verify the cryptographic signature.
         """
         if message.signature is None:
             return VerifyResult(
@@ -118,6 +119,39 @@ class ATKVerifier:
             )
 
         key_id = message.signature.key_id
+
+        # P0 fix: Verify that the key_id belongs to the sender's domain.
+        # Without this check, an attacker could sign with their own domain's
+        # key and point key_id to their DNS, bypassing cross-domain trust.
+        try:
+            _selector, key_domain = self.parse_key_id(key_id)
+        except ATKError:
+            return VerifyResult(
+                passed=False,
+                error_code="550 5.7.28",
+                error_message=f"Invalid ATK key_id format: {key_id!r}",
+            )
+
+        # Extract sender domain from message.from_id
+        from atp.core.identity import AgentID
+        try:
+            sender = AgentID.parse(message.from_id)
+        except Exception:
+            return VerifyResult(
+                passed=False,
+                error_code="550 5.7.28",
+                error_message=f"Invalid sender address: {message.from_id}",
+            )
+
+        if key_domain != sender.domain:
+            return VerifyResult(
+                passed=False,
+                error_code="550 5.7.28",
+                error_message=(
+                    f"ATK key domain mismatch: key_id domain is '{key_domain}' "
+                    f"but sender domain is '{sender.domain}'"
+                ),
+            )
 
         # key_id is already the full DNS name, e.g. "default.atk._atp.sender.com"
         try:

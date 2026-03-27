@@ -90,3 +90,11 @@ class CompositeResolver(BaseDNSResolver):
             if result is not None:
                 return result
         return await self._dns.query_txt(name)
+
+    async def resolve_ips(self, hostname: str) -> list[str]:
+        """Try local peers first (use ip_addresses), then DNS."""
+        if self._local is not None:
+            info = await self._local.query_svcb(hostname)
+            if info is not None and info.ip_addresses:
+                return info.ip_addresses
+        return await self._dns.resolve_ips(hostname)

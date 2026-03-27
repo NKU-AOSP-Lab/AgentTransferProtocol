@@ -71,7 +71,11 @@ class ATPServer:
         # Security
         self.ats_verifier = ATSVerifier(resolver)
         self.atk_verifier = ATKVerifier(resolver)
-        self.replay_guard = ReplayGuard(max_age_seconds=self.config.replay_max_age)
+        replay_db = config_dir / "data" / "nonces.db"
+        self.replay_guard = ReplayGuard(
+            max_age_seconds=self.config.replay_max_age,
+            db_path=replay_db,
+        )
 
         # Signer
         key_storage = KeyStorage(config_dir / "keys")
@@ -122,16 +126,14 @@ class ATPServer:
         """Blocking entry point."""
         self._setup()
 
-        ssl_context = None
-        if self.config.tls_cert_path and self.config.tls_key_path:
-            ssl_context = TLSConfig.create_server_context(
-                self.config.tls_cert_path, self.config.tls_key_path
-            )
+        kwargs: dict = {
+            "host": self.config.host,
+            "port": self.config.port,
+            "log_level": self.config.log_level.lower(),
+        }
 
-        uvicorn.run(
-            self.app,
-            host=self.config.host,
-            port=self.config.port,
-            ssl=ssl_context,
-            log_level=self.config.log_level.lower(),
-        )
+        if self.config.tls_cert_path and self.config.tls_key_path:
+            kwargs["ssl_certfile"] = self.config.tls_cert_path
+            kwargs["ssl_keyfile"] = self.config.tls_key_path
+
+        uvicorn.run(self.app, **kwargs)

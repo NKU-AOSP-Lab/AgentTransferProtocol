@@ -11,6 +11,8 @@ class ServerConfig:
     port: int = 7443
     tls_cert: str = ""
     tls_key: str = ""
+    admin_token: str = ""
+    max_message_size: int = 1_048_576  # 1 MiB
 
 
 @dataclass
@@ -48,6 +50,8 @@ class ConfigStorage:
             port=server_data.get("port", 7443),
             tls_cert=server_data.get("tls_cert", ""),
             tls_key=server_data.get("tls_key", ""),
+            admin_token=server_data.get("admin_token", ""),
+            max_message_size=server_data.get("max_message_size", 1_048_576),
         )
 
         return ATPConfig(

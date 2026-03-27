@@ -20,6 +20,7 @@ class RuntimeServerConfig:
     replay_max_age: int = 300
     retry_max_attempts: int = 6
     log_level: str = "INFO"
+    admin_token: str = ""
 
     @classmethod
     def from_cli_and_config(cls, cli_args: dict, atp_config: ATPConfig) -> "RuntimeServerConfig":
@@ -57,6 +58,10 @@ class RuntimeServerConfig:
         if cli_args.get("log_level"):
             log_level = cli_args["log_level"]
 
+        admin_token = atp_config.server.admin_token if hasattr(atp_config.server, 'admin_token') else ""
+        if cli_args.get("admin_token"):
+            admin_token = cli_args["admin_token"]
+
         return cls(
             domain=domain,
             port=port,
@@ -68,4 +73,5 @@ class RuntimeServerConfig:
             dns_override_file=dns_override_file,
             key_selector=key_selector,
             log_level=log_level,
+            admin_token=admin_token,
         )

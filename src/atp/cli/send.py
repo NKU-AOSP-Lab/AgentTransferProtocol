@@ -30,6 +30,11 @@ def send_cmd(to, from_id, body, subject, payload, server, no_verify, password, o
                 "No sender specified. Use --from or set agent_id in config."
             )
 
+    if "@" not in from_id:
+        raise click.ClickException(
+            f"Sender ID '{from_id}' must include domain (e.g. 'mybot@example.com')."
+        )
+
     # Warn if HTTP
     _, is_https = parse_server_url(server)
     if not is_https and not no_verify:

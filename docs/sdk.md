@@ -139,19 +139,21 @@ msg3 = ATPMessage.from_dict(msg_dict)
 
 ### `Signer` and `Verifier`
 
-Low-level cryptographic operations.
+Low-level cryptographic operations. In production, signing is performed
+by the ATP Server (domain-level key), not by the client. These primitives
+are exposed for server-side use and testing.
 
 ```python
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from atp.core.signature import Signer, Verifier
 
-# Sign a message
+# Server-side: sign a message with domain key before transfer
 private_key = Ed25519PrivateKey.generate()
 signer = Signer(private_key, selector="default", domain="example.com")
 msg = ATPMessage.create("bot@example.com", "target@remote.org", {"body": "hi"})
 signer.sign(msg)  # Signs in-place, attaches signature
 
-# Verify a message
+# Receiving server: verify signature with sender's DNS public key
 public_key = private_key.public_key()
 result = Verifier.verify(msg, public_key)
 print(result.passed)        # True

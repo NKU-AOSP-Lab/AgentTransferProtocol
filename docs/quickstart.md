@@ -149,19 +149,18 @@ Expected output:
 Here's the full flow that just occurred:
 
 ```
-1. CLI built an ATPMessage, signed it with Alice's Ed25519 key
-2. CLI POSTed the message to Server A (localhost:7443)
-3. Server A verified:
-   ├── ATS: Is 127.0.0.1 authorized for alice.local? → PASS ✅
-   ├── ATK: Is the Ed25519 signature valid? → PASS ✅
-   └── Replay: Is this nonce fresh? → PASS ✅
+1. CLI built an unsigned ATPMessage
+2. CLI POSTed the message to Server A (localhost:7443) with Credential (password)
+3. Server A verified Credential:
+   └── Is agent@alice.local a registered agent with valid password? → PASS ✅
 4. Server A looked up bob.local in peers.toml → 127.0.0.1:7444
-5. Server A forwarded the message to Server B
-6. Server B verified independently:
+5. Server A signed the message with its domain-level Ed25519 key
+6. Server A forwarded the signed message to Server B
+7. Server B verified independently:
    ├── ATS: Is 127.0.0.1 authorized for alice.local? → PASS ✅
    ├── ATK: Is the Ed25519 signature valid? → PASS ✅
    └── Replay: Is this nonce fresh? → PASS ✅
-7. Server B delivered the message to agent@bob.local's inbox
+8. Server B delivered the message to agent@bob.local's inbox
 8. CLI recv fetched the message from Server B
 ```
 

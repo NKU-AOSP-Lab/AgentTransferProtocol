@@ -15,18 +15,20 @@ DNS-based discovery, mandatory Ed25519 signing, server-mediated delivery.
   Agent A           ATP Server A          ATP Server B          Agent B
     |                    |                     |                    |
     |---[1. Submit]----->|                     |                    |
-    |                    |                     |                    |
+    |   (unsigned+cred)  |                     |                    |
     |              2. Credential Verify        |                    |
     |                    |                     |                    |
     |              3. DNS SVCB Discover        |                    |
+    |              4. Domain-key Sign (ATK)    |                    |
     |                    |                     |                    |
-    |                    |--[4. Transfer]----->|                    |
+    |                    |--[5. Transfer]----->|                    |
     |                    |   TLS 1.3 + POST    |                    |
+    |                    |   (signed message)  |                    |
     |                    |                     |                    |
-    |                    |               5. ATS+ATK Query (DNS)    |
-    |                    |               6. Sender Authenticated   |
+    |                    |               6. ATS+ATK Verify (DNS)   |
+    |                    |               7. Sender Authenticated   |
     |                    |                     |                    |
-    |<---[202 Accepted]--|                     |---[7. Deliver]--->|
+    |<---[202 Accepted]--|                     |---[8. Deliver]--->|
     |                    |                     |                    |
 ```
 
@@ -44,7 +46,7 @@ Agents need a standard way to communicate across the Internet: securely, without
 |---------|-----|
 | **Identity** | `local@domain` format, powered by DNS |
 | **Discovery** | DNS SVCB records, no central registry needed |
-| **Signing** | Ed25519 on every message, verified at every hop |
+| **Signing** | Ed25519 on every message, verified on cross-domain transfer |
 | **Authorization** | ATS policies in DNS, control who can send for your domain |
 | **Delivery** | Store-and-forward with retry, messages don't get lost |
 
@@ -222,7 +224,7 @@ ATP provides four layers of security, inspired by email's battle-tested approach
 | Authorization | ATS | SPF | Who can send for a domain |
 | Integrity | ATK (Ed25519) | DKIM | Message signing & verification |
 
-Agents authenticate to their server with credentials. Messages are cryptographically signed. Remote servers verify independently via ATS+ATK.
+Agents authenticate to their server with credentials (password). The server signs messages with its domain-level Ed25519 key before forwarding. Remote servers verify independently via ATS+ATK.
 
 ## Documentation
 

@@ -7,9 +7,10 @@ import click
 @click.command("inspect")
 @click.argument("nonce")
 @click.option("--server", required=True, help="Server address (host:port)")
+@click.option("--admin-token", required=True, help="Admin bearer token for server access")
 @click.option("--no-verify", is_flag=True, help="Skip TLS certificate verification")
 @click.option("--output", type=click.Choice(["json", "text"]), default="text")
-def inspect_cmd(nonce, server, no_verify, output):
+def inspect_cmd(nonce, server, admin_token, no_verify, output):
     """Inspect a specific message by nonce."""
     import httpx
     from atp.client.transport import parse_server_url
@@ -27,12 +28,24 @@ def inspect_cmd(nonce, server, no_verify, output):
         if no_verify or not is_https:
             verify = False
 
+        headers = {"Authorization": f"Bearer {admin_token}"}
         async with httpx.AsyncClient(verify=verify) as client:
-            resp = await client.get(f"{base_url}/.well-known/atp/v1/inspect", params={"nonce": nonce})
+            resp = await client.get(f"{base_url}/.well-known/atp/v1/inspect", params={"nonce": nonce}, headers=headers)
+            if resp.status_code not in (200, 404):
+                click.echo(f"Error: server returned {resp.status_code}")
+                try:
+                    detail = resp.json().get("error", "")
+                    if detail:
+                        click.echo(f"  {detail}")
+                except Exception:
+                    pass
+                raise SystemExit(1)
             return resp.status_code, resp.json()
 
     try:
         status_code, data = asyncio.run(_inspect())
+    except SystemExit:
+        raise
     except Exception as e:
         click.echo(f"Error: {e}")
         raise SystemExit(1)

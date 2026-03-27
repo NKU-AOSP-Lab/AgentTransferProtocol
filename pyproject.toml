@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-transfer-protocol"
-version = "1.0.0a7"
+version = "1.0.0a8"
 description = "Agent Transfer Protocol (ATP): secure agent-to-agent communication"
 readme = "README.md"
 license = "MIT"

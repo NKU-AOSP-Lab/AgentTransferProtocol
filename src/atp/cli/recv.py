@@ -28,6 +28,11 @@ def recv_cmd(agent_id, password, server, no_verify, wait, limit, output):
                 "No agent_id specified. Use --agent-id or set in config."
             )
 
+    if "@" not in agent_id:
+        raise click.ClickException(
+            f"Agent ID '{agent_id}' must include domain (e.g. 'mybot@example.com')."
+        )
+
     # Warn if HTTP
     _, is_https = parse_server_url(server)
     if not is_https and not no_verify:

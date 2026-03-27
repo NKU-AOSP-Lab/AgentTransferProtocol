@@ -89,11 +89,14 @@ class ATSPolicy:
 
         return cls(directives)
 
-    def evaluate(self, source_ip: str, sender_domain: str) -> ATSResult:
+    async def evaluate(self, source_ip: str, sender_domain: str, dns_resolver: Optional[BaseDNSResolver] = None) -> ATSResult:
         """Evaluate directives in order; first matching directive wins.
 
         * **ip** directives — check whether *source_ip* belongs to the CIDR.
-        * **domain** directives — exact match or subdomain match.
+        * **domain** directives — resolve the domain to IPs, check if
+          *source_ip* matches any of them. This is analogous to SPF's
+          ``include`` mechanism: ``allow=domain:relay.example.com`` means
+          "allow if the sending server's IP resolves from relay.example.com".
         * **all** — always matches.
 
         Returns ``ATSResult(status="NEUTRAL")`` when no directive matches.
@@ -108,10 +111,17 @@ class ATSPolicy:
                 except ValueError:
                     continue
             elif directive.qualifier == "domain":
-                matched = (
-                    sender_domain == directive.value
-                    or sender_domain.endswith("." + directive.value)
-                )
+                # Resolve the authorized domain to IPs and check if
+                # source_ip is among them.
+                if dns_resolver is not None:
+                    try:
+                        domain_ips = await dns_resolver.resolve_ips(directive.value)
+                        matched = source_ip in domain_ips
+                    except Exception:
+                        continue
+                else:
+                    # No resolver available (e.g. unit test) — cannot verify
+                    continue
             elif directive.qualifier == "all":
                 matched = True
 
@@ -149,8 +159,10 @@ class ATSVerifier:
         try:
             txt = await self._resolver.query_txt(query_name)
         except Exception:
+            # DNS failure is a temporary error — reject the message so the
+            # sender retries later, rather than silently allowing it through.
             return ATSResult(
-                status="NEUTRAL",
+                status="TEMPERROR",
                 error_code=ATPErrorCode.ATS_TEMP_ERROR.value,
             )
 
@@ -158,4 +170,4 @@ class ATSVerifier:
             return ATSResult(status="NEUTRAL")
 
         policy = ATSPolicy.parse(txt)
-        return policy.evaluate(source_ip, sender_domain)
+        return await policy.evaluate(source_ip, sender_domain, dns_resolver=self._resolver)

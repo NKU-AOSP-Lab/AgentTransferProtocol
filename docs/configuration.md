@@ -24,8 +24,8 @@ tls_key = "/path/to/key.pem"
 ~/.atp/
 ├── config.toml          # Global configuration
 ├── keys/
-│   ├── default.key      # Ed25519 private key (PEM)
-│   ├── default.pub      # Ed25519 public key (PEM)
+│   ├── default.key      # Domain-level Ed25519 private key (PEM, used by Server to sign outgoing messages)
+│   ├── default.pub      # Domain-level Ed25519 public key (PEM, published in DNS ATK record)
 │   └── keyring.json     # Key metadata index
 ├── certs/
 │   ├── server.crt       # TLS certificate

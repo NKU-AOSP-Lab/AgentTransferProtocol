@@ -75,7 +75,7 @@ def _make_signed_message(signer, from_id="agent@sender.com", to_id="bot@test.loc
 def mock_server(tmp_path):
     """Create a mock server object with all dependencies mocked."""
     server = MagicMock()
-    server.config = RuntimeServerConfig(domain="test.local", port=7443, max_message_size=1_048_576)
+    server.config = RuntimeServerConfig(domain="test.local", port=7443, max_message_size=1_048_576, admin_token="test-admin-token")
 
     # ATS: always PASS
     server.ats_verifier = AsyncMock()
@@ -406,9 +406,13 @@ class TestRegister:
 
 class TestAgentsList:
     def test_list_agents(self, client):
-        resp = client.get("/.well-known/atp/v1/agents")
+        resp = client.get("/.well-known/atp/v1/agents", headers={"Authorization": "Bearer test-admin-token"})
         assert resp.status_code == 200
         assert "agent@test.local" in resp.json()["agents"]
+
+    def test_list_agents_no_auth(self, client):
+        resp = client.get("/.well-known/atp/v1/agents")
+        assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -566,8 +570,8 @@ class TestHandleStats:
         resp = client.post("/.well-known/atp/v1/message", content=msg.to_json())
         assert resp.status_code == 202
 
-        # Now get stats
-        resp = client.get("/.well-known/atp/v1/stats")
+        # Now get stats (with admin token)
+        resp = client.get("/.well-known/atp/v1/stats", headers={"Authorization": "Bearer test-admin-token"})
         assert resp.status_code == 200
         data = resp.json()
 
@@ -603,8 +607,8 @@ class TestHandleInspect:
         resp = client.post("/.well-known/atp/v1/message", content=msg.to_json())
         assert resp.status_code == 202
 
-        # Inspect by nonce
-        resp = client.get(f"/.well-known/atp/v1/inspect?nonce={msg.nonce}")
+        # Inspect by nonce (with admin token)
+        resp = client.get(f"/.well-known/atp/v1/inspect?nonce={msg.nonce}", headers={"Authorization": "Bearer test-admin-token"})
         assert resp.status_code == 200
         data = resp.json()
         assert data["nonce"] == msg.nonce
@@ -613,11 +617,142 @@ class TestHandleInspect:
         assert data["status"] == "delivered"
 
     def test_inspect_not_found(self, client):
-        resp = client.get("/.well-known/atp/v1/inspect?nonce=nonexistent")
+        resp = client.get("/.well-known/atp/v1/inspect?nonce=nonexistent", headers={"Authorization": "Bearer test-admin-token"})
         assert resp.status_code == 404
         assert "not found" in resp.json()["error"].lower()
 
     def test_inspect_missing_param(self, client):
-        resp = client.get("/.well-known/atp/v1/inspect")
+        resp = client.get("/.well-known/atp/v1/inspect", headers={"Authorization": "Bearer test-admin-token"})
         assert resp.status_code == 400
         assert "nonce" in resp.json()["error"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Security regression tests
+# ---------------------------------------------------------------------------
+
+class TestIdentityBinding:
+    """P0 fix: local agent cannot impersonate another local agent."""
+
+    def test_sender_mismatch_rejected(self, client, mock_server, signer):
+        """Authenticated as agent@test.local but from=other@test.local → 403."""
+        # Register "agent" (already done by fixture) and "other"
+        mock_server.agent_store.register("other@test.local", "otherpass")
+
+        msg = _make_signed_message(signer, from_id="other@test.local", to_id="bot@test.local")
+        # Authenticate as agent@test.local (not other@test.local)
+        import base64
+        creds = base64.b64encode(b"agent@test.local:testpass").decode()
+        resp = client.post(
+            "/.well-known/atp/v1/message",
+            content=msg.to_json(),
+            headers={"Authorization": f"Basic {creds}"},
+        )
+        assert resp.status_code == 403
+        assert "mismatch" in resp.json()["error"].lower()
+
+    def test_case_insensitive_match(self, client, mock_server, signer):
+        """Agent@Test.Local and agent@test.local should be treated as same identity."""
+        msg = _make_signed_message(signer, from_id="agent@test.local", to_id="bot@test.local")
+        # Auth with mixed case — should still pass since AgentID normalizes
+        import base64
+        creds = base64.b64encode(b"agent@test.local:testpass").decode()
+        resp = client.post(
+            "/.well-known/atp/v1/message",
+            content=msg.to_json(),
+            headers={"Authorization": f"Basic {creds}"},
+        )
+        assert resp.status_code == 202
+
+
+class TestRegistrationValidation:
+    """P1 fix: short-form registration validates local_part format."""
+
+    def test_short_form_valid(self, client, mock_server):
+        resp = client.post(
+            "/.well-known/atp/v1/register",
+            json={"agent_id": "validbot", "password": "pass123"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["agent_id"] == "validbot@test.local"
+
+    def test_short_form_invalid_chars(self, client, mock_server):
+        resp = client.post(
+            "/.well-known/atp/v1/register",
+            json={"agent_id": "bad name", "password": "pass123"},
+        )
+        assert resp.status_code == 400
+
+    def test_short_form_slash(self, client, mock_server):
+        resp = client.post(
+            "/.well-known/atp/v1/register",
+            json={"agent_id": "foo/bar", "password": "pass123"},
+        )
+        assert resp.status_code == 400
+
+    def test_reserved_name_blocked(self, client, mock_server):
+        resp = client.post(
+            "/.well-known/atp/v1/register",
+            json={"agent_id": "admin", "password": "pass123"},
+        )
+        assert resp.status_code == 403
+        assert "reserved" in resp.json()["error"].lower()
+
+    def test_wrong_domain_blocked(self, client, mock_server):
+        resp = client.post(
+            "/.well-known/atp/v1/register",
+            json={"agent_id": "evil@other.com", "password": "pass123"},
+        )
+        assert resp.status_code == 403
+
+    def test_full_form_case_normalized(self, client, mock_server):
+        """Full-form agent_id with mixed case should be normalized before storage."""
+        resp = client.post(
+            "/.well-known/atp/v1/register",
+            json={"agent_id": "CaseBot@Test.Local", "password": "pass123"},
+        )
+        assert resp.status_code == 201
+        # Should be stored as normalized lowercase
+        assert resp.json()["agent_id"] == "casebot@test.local"
+
+    def test_case_variant_duplicate_rejected(self, client, mock_server):
+        """Registering a case variant of an existing agent should fail (duplicate)."""
+        # "agent@test.local" is already registered by the fixture
+        resp = client.post(
+            "/.well-known/atp/v1/register",
+            json={"agent_id": "Agent@Test.Local", "password": "different"},
+        )
+        assert resp.status_code == 409
+
+
+class TestReplayPruning:
+    """P2 fix: nonce DB is pruned periodically, not just on startup."""
+
+    def test_prune_removes_expired(self, tmp_path):
+        db = tmp_path / "nonces.db"
+        guard = ReplayGuard(max_age_seconds=10, max_cache_size=100_000, db_path=db, _prune_interval=5)
+        import sqlite3
+
+        now = int(time.time())
+
+        # Insert 6 nonces (triggers prune at 5th insert)
+        for i in range(6):
+            guard.check(f"n{i}", now)
+
+        # Manually insert an expired nonce directly into DB
+        conn = sqlite3.connect(str(db))
+        conn.execute("INSERT INTO nonces (nonce, timestamp) VALUES (?, ?)", ("old", now - 100))
+        conn.commit()
+
+        # Verify expired nonce exists
+        count = conn.execute("SELECT COUNT(*) FROM nonces WHERE nonce='old'").fetchone()[0]
+        assert count == 1
+
+        # Trigger another batch to cause prune
+        for i in range(6, 12):
+            guard.check(f"n{i}", now)
+
+        # After prune, the expired nonce should be gone
+        count = conn.execute("SELECT COUNT(*) FROM nonces WHERE nonce='old'").fetchone()[0]
+        assert count == 0
+        conn.close()

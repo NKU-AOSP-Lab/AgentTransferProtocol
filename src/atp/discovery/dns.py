@@ -32,6 +32,10 @@ class BaseDNSResolver:
     async def query_txt(self, name: str) -> str | None:
         raise NotImplementedError
 
+    async def resolve_ips(self, hostname: str) -> list[str]:
+        """Resolve hostname to IP addresses. Override in subclasses."""
+        return []
+
 
 class DNSResolver(BaseDNSResolver):
     """Real DNS resolver using dnspython."""
@@ -151,6 +155,10 @@ class DNSResolver(BaseDNSResolver):
             except Exception:
                 pass
         return ips
+
+    async def resolve_ips(self, hostname: str) -> list[str]:
+        """Public API: resolve hostname to IP addresses."""
+        return await self._resolve_ips(hostname)
 
     async def query_txt(self, name: str) -> str | None:
         """Query *name* for a TXT record and return its text content."""

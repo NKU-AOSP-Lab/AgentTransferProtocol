@@ -86,8 +86,17 @@ class DeliveryManager:
                 logger.info(f"Retry {stored.nonce} in {delay}s (attempt {stored.retry_count + 1})")
 
     async def transfer(self, message: ATPMessage) -> bool:
-        """Transfer message to remote server. Return True on success."""
+        """Sign with domain key and transfer message to remote server.
+
+        The server signs the message with its domain-level Ed25519 private
+        key before sending. This ensures ATK is a domain-level mechanism:
+        Server B verifies the signature against the sender domain's DNS
+        public key, not against any individual agent's key.
+        """
         try:
+            # Sign with domain-level key before transfer
+            self._signer.sign(message)
+
             target = AgentID.parse(message.to_id)
             server_info = await self._resolver.query_svcb(target.domain)
             if not server_info:
@@ -106,7 +115,11 @@ class DeliveryManager:
         return delays[min(retry_count, len(delays) - 1)]
 
     async def _send_bounce(self, original: ATPMessage, error: str) -> None:
-        """Generate bounce notification and enqueue."""
+        """Generate bounce notification.
+
+        If the original sender is on this server, deliver locally (DELIVERED).
+        Otherwise enqueue for remote transfer (QUEUED).
+        """
         bounce = ATPMessage.create(
             from_id=f"postmaster@{self._domain}",
             to_id=original.from_id,
@@ -117,4 +130,16 @@ class DeliveryManager:
             },
         )
         self._signer.sign(bounce)
+
+        # Check if original sender is local — deliver directly instead of
+        # re-queuing for transfer, which would fail (no credential) or loop.
+        try:
+            sender = AgentID.parse(original.from_id)
+            if sender.domain == self._domain:
+                self._store.enqueue(bounce, MessageStatus.DELIVERED)
+                logger.info(f"Bounce for {original.nonce} delivered locally to {original.from_id}")
+                return
+        except Exception:
+            pass
+
         self._store.enqueue(bounce, MessageStatus.QUEUED)

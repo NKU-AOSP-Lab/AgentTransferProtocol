@@ -17,6 +17,33 @@ from atp.storage.messages import MessageStatus
 
 logger = logging.getLogger("atp.server")
 
+# Reserved agent IDs that cannot be registered by users
+RESERVED_AGENT_IDS = frozenset({
+    "admin", "postmaster", "root", "system", "server",
+    "abuse", "security", "noreply", "no-reply", "mailer-daemon",
+})
+
+
+def _check_admin_auth(request: Request) -> JSONResponse | None:
+    """Verify admin token from Authorization: Bearer <token>.
+
+    Returns None if authorized, or a 401/403 JSONResponse if not.
+    The admin token is set via server config (admin_token).
+    """
+    server = request.app.state.server
+    admin_token = getattr(server.config, "admin_token", None)
+    if not admin_token:
+        return JSONResponse(
+            {"error": "Admin access not configured (set admin_token in server config)"},
+            status_code=403,
+        )
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return JSONResponse({"error": "Admin authentication required"}, status_code=401)
+    if auth_header[7:] != admin_token:
+        return JSONResponse({"error": "Invalid admin token"}, status_code=403)
+    return None
+
 
 async def handle_message(request: Request) -> JSONResponse:
     """POST /.well-known/atp/v1/message
@@ -47,10 +74,11 @@ async def handle_message(request: Request) -> JSONResponse:
         # 3. Source IP
         source_ip = request.client.host if request.client else "0.0.0.0"
 
-        # 4. Sender domain
+        # 4. Sender domain — normalize from_id for consistent storage
         try:
             sender = AgentID.parse(message.from_id)
             sender_domain = sender.domain
+            message.from_id = str(sender)
         except MessageFormatError as exc:
             return JSONResponse(
                 status_code=400,
@@ -89,6 +117,28 @@ async def handle_message(request: Request) -> JSONResponse:
                         status_code=401,
                     )
 
+                # P0 fix: Bind credential identity to message sender.
+                # Authenticated agent must match message "from" field,
+                # otherwise any local user could impersonate another.
+                # Compare normalized AgentIDs (case-insensitive).
+                try:
+                    auth_parsed = AgentID.parse(auth_agent_id)
+                    from_parsed = AgentID.parse(message.from_id)
+                except MessageFormatError:
+                    return JSONResponse(
+                        {"error": "Invalid agent ID in credential or message"},
+                        status_code=400,
+                    )
+                if auth_parsed != from_parsed:
+                    logger.warning(
+                        f"Identity mismatch: authenticated as {auth_agent_id}, "
+                        f"but message from={message.from_id}"
+                    )
+                    return JSONResponse(
+                        {"error": "Sender identity mismatch: authenticated agent does not match message 'from'"},
+                        status_code=403,
+                    )
+
                 if server.metrics:
                     server.metrics.record_credential_passed()
 
@@ -102,6 +152,14 @@ async def handle_message(request: Request) -> JSONResponse:
             # ATS verify
             ats_result = await server.ats_verifier.verify(sender_domain, source_ip)
             server.metrics.record_ats(ats_result.status)
+            if ats_result.status == "TEMPERROR":
+                return JSONResponse(
+                    status_code=451,
+                    content={
+                        "error": "ATS temporary DNS error, retry later",
+                        "error_code": ats_result.error_code,
+                    },
+                )
             if ats_result.status == "FAIL":
                 return JSONResponse(
                     status_code=403,
@@ -133,9 +191,12 @@ async def handle_message(request: Request) -> JSONResponse:
                 content={"error": "Replay detected"},
             )
 
-        # 8. Route decision
+        # 8. Route decision — normalize to_id for case-insensitive mailbox lookup
         try:
-            to_domain = AgentID.parse(message.to_id).domain
+            to_parsed = AgentID.parse(message.to_id)
+            to_domain = to_parsed.domain
+            # Normalize to_id so DB storage matches case-insensitive recv queries
+            message.to_id = str(to_parsed)
         except MessageFormatError as exc:
             return JSONResponse(
                 status_code=400,
@@ -226,14 +287,19 @@ async def handle_recv(request: Request) -> JSONResponse:
     stored_messages = await server.queue.get_for_agent(agent_id, limit, after_id)
 
     messages = []
+    last_id = None
     for sm in stored_messages:
         try:
             msg = ATPMessage.from_json(sm.message_json)
             messages.append(msg.to_dict())
+            last_id = sm.id  # Track highest DB id for cursor pagination
         except Exception:
             pass
 
-    return JSONResponse(content={"messages": messages, "count": len(messages)})
+    result = {"messages": messages, "count": len(messages)}
+    if last_id is not None:
+        result["last_id"] = last_id
+    return JSONResponse(content=result)
 
 
 async def handle_capabilities(request: Request) -> JSONResponse:
@@ -259,8 +325,11 @@ async def handle_health(request: Request) -> JSONResponse:
 
 async def handle_stats(request: Request) -> JSONResponse:
     """GET /.well-known/atp/v1/stats
-    Returns server metrics + queue status from DB.
+    Returns server metrics + queue status from DB. Requires admin auth.
     """
+    denied = _check_admin_auth(request)
+    if denied:
+        return denied
     server = request.app.state.server
     metrics = server.metrics.to_dict()
 
@@ -297,8 +366,11 @@ async def handle_stats(request: Request) -> JSONResponse:
 
 async def handle_inspect(request: Request) -> JSONResponse:
     """GET /.well-known/atp/v1/inspect?nonce=<nonce>
-    Returns detailed status of a specific message.
+    Returns detailed status of a specific message. Requires admin auth.
     """
+    denied = _check_admin_auth(request)
+    if denied:
+        return denied
     server = request.app.state.server
     nonce = request.query_params.get("nonce")
     if not nonce:
@@ -345,6 +417,37 @@ async def handle_register(request: Request) -> JSONResponse:
     if not hasattr(server, "agent_store") or server.agent_store is None:
         return JSONResponse({"error": "Agent registration not available"}, status_code=503)
 
+    # Validate agent_id format: if it contains '@', verify domain matches server
+    # If no '@', auto-complete with server domain
+    if "@" in agent_id:
+        try:
+            parsed = AgentID.parse(agent_id)
+        except MessageFormatError as exc:
+            return JSONResponse({"error": f"Invalid agent_id format: {exc}"}, status_code=400)
+        if parsed.domain != server.config.domain:
+            return JSONResponse(
+                {"error": f"Cannot register agent for domain '{parsed.domain}' on server '{server.config.domain}'"},
+                status_code=403,
+            )
+        local_part = parsed.local_part
+        agent_id = str(parsed)  # Normalize to lowercase canonical form
+    else:
+        # Short-form: validate by constructing full ID and parsing it
+        full_id = f"{agent_id}@{server.config.domain}"
+        try:
+            parsed = AgentID.parse(full_id)
+        except MessageFormatError as exc:
+            return JSONResponse({"error": f"Invalid agent_id format: {exc}"}, status_code=400)
+        local_part = parsed.local_part
+        agent_id = str(parsed)
+
+    # Block reserved agent IDs
+    if local_part in RESERVED_AGENT_IDS:
+        return JSONResponse(
+            {"error": f"Agent ID '{local_part}' is reserved and cannot be registered"},
+            status_code=403,
+        )
+
     try:
         record = server.agent_store.register(agent_id, password)
         logger.info(f"Agent registered: {agent_id}")
@@ -359,8 +462,11 @@ async def handle_register(request: Request) -> JSONResponse:
 async def handle_agents(request: Request) -> JSONResponse:
     """GET /.well-known/atp/v1/agents
 
-    List registered agents.
+    List registered agents. Requires admin auth.
     """
+    denied = _check_admin_auth(request)
+    if denied:
+        return denied
     server = request.app.state.server
 
     if not hasattr(server, "agent_store") or server.agent_store is None:

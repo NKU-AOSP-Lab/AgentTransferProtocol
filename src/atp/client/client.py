@@ -5,30 +5,18 @@ from pathlib import Path
 
 from atp.client.transport import HTTPTransport, parse_server_url
 from atp.core.message import ATPMessage
-from atp.core.signature import Signer
 from atp.storage.config import ConfigStorage
-from atp.storage.keys import KeyStorage
-
-
-def _extract_domain(server: str) -> str:
-    """Extract the domain/host from a server string (strip scheme and port)."""
-    domain = server
-    for prefix in ("https://", "http://"):
-        if domain.startswith(prefix):
-            domain = domain[len(prefix) :]
-    domain = domain.split(":")[0]
-    return domain
-
-
-def _auto_complete_agent_id(agent_id: str, server: str) -> str:
-    """If agent_id has no '@', append @domain from server."""
-    if "@" not in agent_id:
-        domain = _extract_domain(server)
-        return f"{agent_id}@{domain}"
-    return agent_id
 
 
 class ATPClient:
+    """ATP client for sending and receiving messages.
+
+    Requires a full agent_id in 'local@domain' format. Short-form IDs
+    (without '@') are only accepted by the server's registration endpoint.
+    For send/recv, the client needs the full ID to set the message 'from'
+    field correctly.
+    """
+
     def __init__(
         self,
         agent_id: str,
@@ -37,15 +25,20 @@ class ATPClient:
         no_verify: bool = False,
         password: str | None = None,
     ):
+        if "@" not in agent_id:
+            raise ValueError(
+                f"agent_id must be in 'local@domain' format, got: {agent_id!r}. "
+                f"Use the full ID returned by 'atp agent register'."
+            )
         self._server = server
         self._base_url, self._is_https = parse_server_url(server)
-        self._agent_id = _auto_complete_agent_id(agent_id, server)
+        self._agent_id = agent_id
         self._password = password
         self._config_storage = ConfigStorage(config_dir)
         self._config = self._config_storage.load()
         self._no_verify = no_verify
         self._transport = HTTPTransport(no_verify=no_verify)
-        self._keys = KeyStorage(self._config_storage.config_dir / "keys")
+        self._last_recv_id: int | None = None
 
     async def send(
         self,
@@ -54,7 +47,13 @@ class ATPClient:
         body: str | None = None,
         subject: str | None = None,
     ) -> dict:
-        """Build, sign, and send a message."""
+        """Build and send a message (unsigned).
+
+        The message is submitted unsigned to the local ATP Server.
+        The server signs it with the domain-level Ed25519 key before
+        forwarding to the remote server. This ensures ATK signing is
+        a domain-level operation, not per-agent.
+        """
         if payload is None:
             payload = {}
             if body:
@@ -64,12 +63,7 @@ class ATPClient:
 
         msg = ATPMessage.create(from_id=self._agent_id, to_id=to, payload=payload)
 
-        # Sign
-        selector = self._config.key_selector or "default"
-        domain = self._agent_id.split("@")[1] if "@" in self._agent_id else "localhost"
-        private_key = self._keys.load_private_key(selector)
-        signer = Signer(private_key, selector, domain)
-        signer.sign(msg)
+        # No client-side signing — Server A signs with domain key on transfer.
 
         # Send
         auth = (self._agent_id, self._password) if self._password else None
@@ -90,9 +84,13 @@ class ATPClient:
         wait: bool = False,
         timeout: float = 30.0,
     ) -> list[ATPMessage]:
-        """Receive messages from server. Requires Credential authentication."""
+        """Receive messages from server. Requires Credential authentication.
+
+        Uses cursor-based pagination via after_id to avoid re-fetching
+        the same messages on repeated calls or in --wait mode.
+        """
         url = f"{self._base_url}/.well-known/atp/v1/messages"
-        params = {"limit": str(limit)}
+        params: dict[str, str] = {"limit": str(limit)}
 
         # Build auth headers
         headers = {}
@@ -102,6 +100,10 @@ class ATPClient:
             headers["Authorization"] = f"Basic {cred}"
         else:
             params["agent_id"] = self._agent_id
+
+        # Use stored cursor to avoid re-fetching
+        if self._last_recv_id is not None:
+            params["after_id"] = str(self._last_recv_id)
 
         client = self._transport._get_client()
 
@@ -113,6 +115,10 @@ class ATPClient:
                 data = resp.json()
                 messages = data.get("messages", [])
                 if messages:
+                    last_id = data.get("last_id")
+                    if last_id is not None:
+                        self._last_recv_id = last_id
+                        params["after_id"] = str(last_id)
                     return [ATPMessage.from_dict(m) for m in messages]
                 await asyncio.sleep(2)
             return []
@@ -120,6 +126,9 @@ class ATPClient:
             resp = await client.get(url, params=params, headers=headers)
             data = resp.json()
             messages = data.get("messages", [])
+            last_id = data.get("last_id")
+            if last_id is not None:
+                self._last_recv_id = last_id
             return [ATPMessage.from_dict(m) for m in messages]
 
     async def close(self) -> None:

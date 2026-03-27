@@ -19,15 +19,20 @@ class MockResolver(BaseDNSResolver):
         self,
         txt_records: dict[str, str] | None = None,
         svcb_records: dict[str, ServerInfo] | None = None,
+        ip_records: dict[str, list[str]] | None = None,
     ):
         self._txt = txt_records or {}
         self._svcb = svcb_records or {}
+        self._ips = ip_records or {}
 
     async def query_svcb(self, domain: str) -> ServerInfo | None:
         return self._svcb.get(domain)
 
     async def query_txt(self, name: str) -> str | None:
         return self._txt.get(name)
+
+    async def resolve_ips(self, hostname: str) -> list[str]:
+        return self._ips.get(hostname, [])
 
 
 # ── ATSPolicy.parse ────────────────────────────────────────────────────────
@@ -77,60 +82,73 @@ class TestATSPolicyParse:
 
 class TestATSPolicyEvaluate:
 
-    def test_source_ip_in_allowed_cidr_passes(self):
+    @pytest.mark.asyncio
+    async def test_source_ip_in_allowed_cidr_passes(self):
         policy = ATSPolicy.parse("v=atp1 allow=ip:192.0.2.0/24 deny=all")
-        result = policy.evaluate("192.0.2.42", "example.com")
+        result = await policy.evaluate("192.0.2.42", "example.com")
         assert result.status == "PASS"
         assert result.error_code is None
 
-    def test_source_ip_not_in_range_deny_all_fails(self):
+    @pytest.mark.asyncio
+    async def test_source_ip_not_in_range_deny_all_fails(self):
         policy = ATSPolicy.parse("v=atp1 allow=ip:192.0.2.0/24 deny=all")
-        result = policy.evaluate("10.0.0.1", "example.com")
+        result = await policy.evaluate("10.0.0.1", "example.com")
         assert result.status == "FAIL"
         assert result.error_code == "550 5.7.26"
 
-    def test_domain_exact_match_passes(self):
+    @pytest.mark.asyncio
+    async def test_domain_ip_resolves_and_matches(self):
+        """allow=domain:partner.com should resolve partner.com to IPs and match source_ip."""
+        resolver = MockResolver(ip_records={"partner.com": ["10.0.0.1", "10.0.0.2"]})
         policy = ATSPolicy.parse("v=atp1 allow=domain:partner.com deny=all")
-        result = policy.evaluate("10.0.0.1", "partner.com")
+        result = await policy.evaluate("10.0.0.1", "sender.com", dns_resolver=resolver)
         assert result.status == "PASS"
 
-    def test_domain_subdomain_match_passes(self):
+    @pytest.mark.asyncio
+    async def test_domain_ip_does_not_match(self):
+        """allow=domain:partner.com should FAIL if source_ip doesn't resolve from partner.com."""
+        resolver = MockResolver(ip_records={"partner.com": ["10.0.0.1"]})
         policy = ATSPolicy.parse("v=atp1 allow=domain:partner.com deny=all")
-        result = policy.evaluate("10.0.0.1", "sub.partner.com")
-        assert result.status == "PASS"
-
-    def test_domain_no_match_deny_all(self):
-        policy = ATSPolicy.parse("v=atp1 allow=domain:partner.com deny=all")
-        result = policy.evaluate("10.0.0.1", "other.com")
+        result = await policy.evaluate("99.99.99.99", "sender.com", dns_resolver=resolver)
         assert result.status == "FAIL"
 
-    def test_no_matching_directive_returns_neutral(self):
+    @pytest.mark.asyncio
+    async def test_domain_without_resolver_skips(self):
+        """domain directive without resolver should be skipped, falling through to deny=all."""
+        policy = ATSPolicy.parse("v=atp1 allow=domain:partner.com deny=all")
+        result = await policy.evaluate("10.0.0.1", "partner.com")
+        assert result.status == "FAIL"  # domain skipped, deny=all matches
+
+    @pytest.mark.asyncio
+    async def test_no_matching_directive_returns_neutral(self):
         policy = ATSPolicy.parse("v=atp1 allow=ip:192.0.2.0/24")
-        result = policy.evaluate("10.0.0.1", "example.com")
+        result = await policy.evaluate("10.0.0.1", "example.com")
         assert result.status == "NEUTRAL"
 
-    def test_localhost_allowed(self):
+    @pytest.mark.asyncio
+    async def test_localhost_allowed(self):
         policy = ATSPolicy.parse("v=atp1 allow=ip:127.0.0.1/32 deny=all")
-        result = policy.evaluate("127.0.0.1", "localhost")
+        result = await policy.evaluate("127.0.0.1", "localhost")
         assert result.status == "PASS"
 
-    def test_allow_all_passes_everything(self):
+    @pytest.mark.asyncio
+    async def test_allow_all_passes_everything(self):
         policy = ATSPolicy.parse("v=atp1 allow=all")
-        result = policy.evaluate("1.2.3.4", "any.domain")
+        result = await policy.evaluate("1.2.3.4", "any.domain")
         assert result.status == "PASS"
 
-    def test_deny_all_alone_fails(self):
+    @pytest.mark.asyncio
+    async def test_deny_all_alone_fails(self):
         policy = ATSPolicy.parse("v=atp1 deny=all")
-        result = policy.evaluate("1.2.3.4", "any.domain")
+        result = await policy.evaluate("1.2.3.4", "any.domain")
         assert result.status == "FAIL"
 
-    def test_first_matching_directive_wins(self):
+    @pytest.mark.asyncio
+    async def test_first_matching_directive_wins(self):
         policy = ATSPolicy.parse("v=atp1 deny=ip:10.0.0.0/8 allow=all")
-        # IP 10.0.0.1 matches the deny first
-        result = policy.evaluate("10.0.0.1", "example.com")
+        result = await policy.evaluate("10.0.0.1", "example.com")
         assert result.status == "FAIL"
-        # IP 192.168.1.1 does NOT match deny, so falls through to allow=all
-        result = policy.evaluate("192.168.1.1", "example.com")
+        result = await policy.evaluate("192.168.1.1", "example.com")
         assert result.status == "PASS"
 
 
@@ -166,7 +184,7 @@ class TestATSVerifier:
         assert result.status == "NEUTRAL"
         assert result.error_code is None
 
-    async def test_verify_dns_error_returns_neutral_with_temp_error(self):
+    async def test_verify_dns_error_returns_temperror(self):
         class FailingResolver(BaseDNSResolver):
             async def query_svcb(self, domain):
                 return None
@@ -176,5 +194,5 @@ class TestATSVerifier:
 
         verifier = ATSVerifier(FailingResolver())
         result = await verifier.verify("fail.com", "10.0.0.1")
-        assert result.status == "NEUTRAL"
+        assert result.status == "TEMPERROR"
         assert result.error_code == "451 4.7.26"

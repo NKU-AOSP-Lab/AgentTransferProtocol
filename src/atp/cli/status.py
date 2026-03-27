@@ -5,9 +5,10 @@ import click
 
 @click.command("status")
 @click.option("--server", required=True, help="Server address (host:port)")
+@click.option("--admin-token", required=True, help="Admin bearer token for server access")
 @click.option("--no-verify", is_flag=True, help="Skip TLS certificate verification")
 @click.option("--output", type=click.Choice(["json", "text"]), default="text")
-def status_cmd(server, no_verify, output):
+def status_cmd(server, admin_token, no_verify, output):
     """Show ATP server status and metrics."""
     import httpx
     from atp.client.transport import parse_server_url
@@ -25,12 +26,24 @@ def status_cmd(server, no_verify, output):
         if no_verify or not is_https:
             verify = False
 
+        headers = {"Authorization": f"Bearer {admin_token}"}
         async with httpx.AsyncClient(verify=verify) as client:
-            stats_resp = await client.get(f"{base_url}/.well-known/atp/v1/stats")
+            stats_resp = await client.get(f"{base_url}/.well-known/atp/v1/stats", headers=headers)
+            if stats_resp.status_code != 200:
+                click.echo(f"Error: server returned {stats_resp.status_code}")
+                try:
+                    detail = stats_resp.json().get("error", "")
+                    if detail:
+                        click.echo(f"  {detail}")
+                except Exception:
+                    pass
+                raise SystemExit(1)
             return stats_resp.json()
 
     try:
         data = asyncio.run(_status())
+    except SystemExit:
+        raise
     except Exception as e:
         click.echo(f"Error connecting to server: {e}")
         raise SystemExit(1)
